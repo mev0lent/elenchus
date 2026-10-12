@@ -1,0 +1,82 @@
+/*
+  Elenchus card styling. Paste into Anki:
+  Tools > Manage Note Types > Basic (and Cloze) > Cards > Styling.
+  The same five colors as hooks/palette.ts:
+  cream FBF5F3, purple 7D5BA6, navy 000022, teal 3BCEAC, crimson C42847.
+*/
+
+.card {
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 20px;
+  line-height: 1.5;
+  text-align: left;
+  color: #000022;
+  background-color: #FBF5F3;
+  padding: 20px;
+}
+
+.card hr#answer {
+  border: 0;
+  border-top: 2px solid #7D5BA6;
+  margin: 1.2em 0;
+}
+
+.cloze {
+  font-weight: 700;
+  color: #7D5BA6;
+}
+
+.card code {
+  background-color: #000022;
+  color: #3BCEAC;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+
+/* the card that links this topic to an earlier one */
+.el-connects {
+  margin-top: 1.2em;
+  padding: 0.4em 0.8em;
+  border-left: 4px solid #7D5BA6;
+}
+
+.el-connects b {
+  color: #7D5BA6;
+}
+
+/* the mistake you actually made */
+.el-mistake {
+  margin-top: 0.8em;
+  padding: 0.4em 0.8em;
+  border-left: 4px solid #C42847;
+  color: #C42847;
+}
+
+/* night mode: navy ground, teal accents. Purple and crimson fail as small text on navy,
+   so they stay on borders only and the text goes cream. */
+.nightMode .card,
+.night_mode .card {
+  color: #FBF5F3;
+  background-color: #000022;
+}
+
+.nightMode .cloze,
+.night_mode .cloze {
+  color: #3BCEAC;
+}
+
+.nightMode .card code,
+.night_mode .card code {
+  background-color: #FBF5F3;
+  color: #000022;
+}
+
+.nightMode .el-connects b,
+.night_mode .el-connects b {
+  color: #3BCEAC;
+}
+
+.nightMode .el-mistake,
+.night_mode .el-mistake {
+  color: #FBF5F3;
+}
