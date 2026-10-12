@@ -1,0 +1,22 @@
+# Elenchus gate hooks for Mistral Vibe.
+#
+# pre_tool records the user's typed words from the session transcript before
+# the reply is written (Vibe has no UserPromptSubmit hook) and locks tools
+# while a gate is closed. strict = true keeps the gate closed when the engine
+# cannot run. post_agent reviews the finished reply: a violation denies the
+# turn and the reason is injected as a retry message, a repeated violation
+# warns the user. See README.md for the protocol.
+
+[[hooks]]
+name = "gate-tools"
+type = "pre_tool"
+match = "*"
+strict = true
+command = "sh scripts/run.sh hook-pretool"
+timeout = 15.0
+
+[[hooks]]
+name = "review-reply"
+type = "post_agent"
+command = "sh scripts/run.sh hook-postagent"
+timeout = 15.0
