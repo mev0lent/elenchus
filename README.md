@@ -1,223 +1,122 @@
 # Elenchus
 
-A learning-gate plugin that protects your own thinking. Explain, predict, or propose first. The agent probes your reasoning, and work opens only after your understanding has been assessed. A well-reasoned disagreement counts as success.
+Use AI for speed and stay the master of your work. The ideas, the decisions and the reasons are yours. The code and the configuration may come from the agent.
 
-The name is the Greek word for Socratic cross-examination.
+Every project gets an owner's paper: a Typst document, compiled to PDF, in which each decision is stated formally, as an equation, invariant, definition or algorithm. You own a decision only after you have formalized it yourself and defended that formalization under questioning.
 
-For a one-page reference of every command, see [USAGE.md](USAGE.md).
+## Three commands
 
-## One repository, four plugins
+| Command | For |
+| --- | --- |
+| `/elenchus:learn <mode> <topic>` | Learning. You explain, predict or propose first; the agent probes; you pass when your reasoning holds. |
+| `/elenchus:paper` | Start a project's paper, or see its state and build the PDF. `/elenchus:paper all` lists every paper you have. |
+| `/elenchus:own <decision>` | Own a decision. It must be formalized in the paper; the agent attacks the formalism; pass, and it is marked yours, with your own reasons. |
 
-The repository is a plugin marketplace. One learning protocol, one gate engine, packaged for three agent hosts, plus an ownership workflow that builds on it:
-
-```
-elenchus/
-├── .claude-plugin/marketplace.json   marketplace for Claude Code and Claude Cowork
-├── .agents/plugins/marketplace.json  marketplace for Codex (CLI and ChatGPT desktop app)
-└── plugins/
-    ├── elenchus/        the gates: engine, hooks, skill. Claude Code, Cowork and Codex
-    ├── elenchus-ui/     optional, Claude Code CLI only: focus card, compact tool view, themes
-    ├── elenchus-vibe/   the Mistral Vibe port of the gates
-    └── ownership/       one owner's paper per project: your decisions vs inherited ones. All hosts
-```
-
-`elenchus` runs without the UI. Hosts without Claude Code's mods API (Cowork, Codex, older CLI builds) simply do not install `elenchus-ui`; the pinned question is then available through `/elenchus:focus`.
-
-| Host | Gates (`elenchus`) | Focus card (`elenchus-ui`) | Ownership |
-| --- | --- | --- | --- |
-| Claude Code CLI | full: hooks, skill, commands | yes | yes |
-| Claude Cowork (desktop app) | full: hooks run in Cowork | no, needs the mods API | yes |
-| Claude desktop Chat tab | no: hooks do not run in chat | no | skills only |
-| Codex CLI and ChatGPT desktop app (Codex, Work mode) | full: Codex speaks the same hook protocol | no | yes |
-| ChatGPT chat | no hooks | no | skills only |
-| Mistral Vibe | via `elenchus-vibe` | no | yes |
-
-Without hooks nothing enforces a gate. A skill alone is a polite request to the model, not a learning gate.
+Also: `/elenchus:status`, `/elenchus:cards` (Anki cards from your last gate), `/elenchus:off`. In Codex, type them without the slash: `elenchus own <decision>`.
 
 ## Install
+
+You need Python 3.8 or newer and Typst (`pip install typst`, or the Typst CLI). On Windows also Git for Windows. The examples assume the repository is cloned to `~/Documents/elenchus`.
 
 **Claude Code CLI**
 
 ```sh
-claude plugin marketplace add mev0lent/elenchus      # or a local path to this repository
+claude plugin marketplace add ~/Documents/elenchus      # Windows: "$env:USERPROFILE\Documents\elenchus"
 claude plugin install elenchus@elenchus
-claude plugin install ownership@elenchus
-claude plugin install elenchus-ui@elenchus           # optional
+claude plugin install elenchus-ui@elenchus              # optional: keeps the question above the input
 ```
 
-For development, load a working copy directly: `claude --plugin-dir <repo>/plugins/elenchus --plugin-dir <repo>/plugins/ownership`. Start Claude Code from your learning project, not from the plugin directory. Use `/reload-plugins` after updating.
+**Claude desktop app** (Windows; Linux beta for Ubuntu and Debian): push the repository, then Customize > Plugins > Add marketplace > `mev0lent/elenchus`, and install `elenchus`. It runs in Cowork, not in the Chat tab. Without pushing: zip the contents of `plugins/elenchus` and upload the zip on the same page. Cowork runs the agent in its own Linux environment; if the PDF build reports that Typst is missing there, ask the agent to run `pip install typst` once.
 
-**Claude Cowork (desktop app):** Customize > Plugins > Add marketplace, enter `mev0lent/elenchus` (a private repository needs the GitHub connection), then install `elenchus` and `ownership`. Skip `elenchus-ui`. Click Update on the marketplace after pushing changes.
-
-**Codex:** `codex plugin marketplace add mev0lent/elenchus`, then install `elenchus` and `ownership` from the Plugins Directory of the ChatGPT desktop app. Codex asks you to review and trust plugin hooks before they run; Elenchus does nothing until you do. Codex has no plugin slash commands, so type the commands as text: `elenchus learn explain TLS handshakes`, `elenchus off`, `elenchus status`, `elenchus focus`, `elenchus cards` (or mention the matching `$elenchus-learn` skill). Codex reads files through the shell, and the shell stays locked while a gate is locked, so the agent cannot browse your project during a locked gate.
-
-**Mistral Vibe:** put `plugins/elenchus-vibe/` into a plugins directory and start Vibe in your learning project:
+**Mistral Vibe CLI**
 
 ```sh
-# user scope (every project)
-mkdir -p ~/.vibe/plugins && cp -r plugins/elenchus-vibe ~/.vibe/plugins/elenchus
-# or project scope, inside a trusted folder
-mkdir -p .vibe/plugins && cp -r plugins/elenchus-vibe .vibe/plugins/elenchus
+# Linux
+mkdir -p ~/.vibe/plugins && ln -s ~/Documents/elenchus/plugins/elenchus-vibe ~/.vibe/plugins/elenchus
 ```
 
-On Windows, `mklink /J "%USERPROFILE%\.vibe\plugins\elenchus" "...Documents\elenchus\plugins\elenchus-vibe"` links the folder instead of copying. `plugins/ownership` installs the same way under `~/.vibe/plugins/ownership`.
+```bat
+:: Windows, in cmd
+mklink /J "%USERPROFILE%\.vibe\plugins\elenchus" "%USERPROFILE%\Documents\elenchus\plugins\elenchus-vibe"
+```
 
-## Start learning
+**ChatGPT desktop app and Codex CLI** (Windows; Linux preview for Ubuntu, Debian and Fedora): `codex plugin marketplace add ~/Documents/elenchus` (Windows: `"$env:USERPROFILE\Documents\elenchus"`), restart the app, install `elenchus` from the Plugins Directory, and trust its hooks when asked (`/hooks`). Without trusted hooks, nothing is enforced.
 
-Type `/elenchus:learn explain TLS handshakes` (Codex: `elenchus learn explain TLS handshakes`). Commands are `learn`, `off`, `status`, `focus`, and `cards`. `/elenchus:off` disables gates for this session.
+Plugins load in every session. Gates do not: Elenchus only asks questions after you start a command.
 
-| Mode | Your first move | Claude's job |
+**Check:** `/elenchus:learn explain TLS handshakes` should get exactly one question and no explanation.
+
+## The paper
+
+`/elenchus:paper` creates it with five sections. Only the last part of a decision is prose.
+
+| Section | What goes in |
+| --- | --- |
+| Purpose | Numbered claims, one line each: what must hold for the project to be worth anything. |
+| Notation | Every symbol, defined exactly once. |
+| Model | Your formal statements, each numbered and labeled. |
+| Decisions | One line per decision, pointing to its formal statement. Below it, only why. |
+| Limits and open questions | What the model does not cover. |
+
+```typst
+= Notation
+#symbols(($tau$, [gate threshold on $P("normal" | x)$]), ($A$, [set of anomalous responses]))
+
+= Model
+$ "archive"(x) <==> P("normal" | x) >= tau $ <eq-gate>
+
+#invariant("no test leakage")[$tau = f(D_"dev")$, and $f$ never reads $D_"test"$.] <inv-leak>
+
+#algorithm("Triage", input: [$x$], output: [archive or escalate])[
+  + $p <- P("normal" | x)$
+  + *if* $p >= tau$ *then* archive *else* escalate
+] <alg-triage>
+
+= Decisions
+#decision("Archive iff P(normal) >= tau", origin: "mine", formal: (<eq-gate>, <alg-triage>), where: "gatelib.mjs:12")
+Rejected: a fixed top-k per batch, because the anomaly rate varies between targets.
+```
+
+Equations, definitions, invariants and algorithms are numbered, and the PDF cites them ("Formal: Equation 1, Algorithm 1"). Typst refuses to build the PDF if a decision points to a label that does not exist.
+
+| A decision line | Means |
+| --- | --- |
+| `origin: "inherited"` | In the project, not yours yet. The agent logs these on its own, never formalized. |
+| `origin: "mine"`, no `formal:` | Your decision, but not stated formally. It cannot be owned yet. |
+| `origin: "mine", formal: <…>` | Formalized and ready for `/elenchus:own`. |
+| `gate: "<id>"` | Owned. Only `/elenchus:own` sets this. Your words from the gate are below it, the full record is in `gates/`. |
+
+Keep each `#decision` on one line. Nothing is marked in the code; `where:` points into it.
+
+Cards you want to keep go next to the decision, one line each: `#card("Why >= at tau?", "Equality archives: tau is the lowest confidence I trust.")`. `/elenchus:paper` exports them to Anki, alongside the cards from your gates.
+
+The PDF uses a subtle pastel palette, as colored edges and labels: definitions in sky, invariants in mint, algorithms in lavender, decisions by state (butter: yours, mint: owned, peach: inherited). For your own emphasis: `#mark[...]` highlights in rose, `#highlight[...]` in butter, `#note[...]` adds a remark. The palette sits at the top of each paper; change it there if you like.
+
+## An existing project you want to own completely
+
+1. **`/elenchus:paper`.** The agent asks where the paper lives: `docs/paper` in your own private repository, or a folder of your notes for anything public or not yours. For employer or client work it first asks whether you may keep notes outside their systems.
+2. **Write `recall.md` first**, next to the paper, from memory, without the code and without the agent: what the project does, its parts, its main decisions and why, what you know you don't know. Commit it and never edit it.
+3. **Let the agent list the decisions** it finds in the code. They enter the paper as `inherited`: what and where, never why, never a formula. Compare with your recall: what you missed or got wrong is where you start.
+4. **Formalize one decision.** Define its symbols under Notation, write its statement under Model with a label, and point the decision to it with `formal: <label>`. If you disagree with the decision, formalize the better one and let the agent change the code.
+5. **`/elenchus:own <decision>`.** The agent attacks your formalization: undefined symbols, boundary cases, whether the code really does what the statement says. Answer, derive, defend, finish with `reflect: <your conclusion and reasons>`.
+6. **Repeat 4 and 5**, foundations first. If one gate covered several closely related decisions, the agent can bind it to each of them (`paper bind`), as long as each is formalized. You are done when `/elenchus:paper` says `OWNED`. When the code changes later, it tells you; own again what the change touched.
+
+## A new project you want to own from the start
+
+1. **`/elenchus:paper` before the first line of code.** Write the purpose as numbered claims.
+2. **Formalize before you build.** Each decision you make goes into Notation, Model and Decisions as above. That is the design.
+3. **Build with the agent as usual.** Every decision it makes on its own lands in the paper as `inherited`, automatically, in every session. Formalize the ones that matter and take them over, or replace them.
+4. **`/elenchus:own` whenever you choose.** Building is never blocked. A good rule: everything owned before you publish the project or rely on it.
+
+## Learning gates
+
+| Mode | For | You start by |
 | --- | --- | --- |
-| `explain` | Explain the mechanism in your own words | Probe a new case, check a limit, then assess your conclusion |
-| `predict` | `predict: <output and why>` for registered code | Run that exact example once, compare the output, then assess your reasoning |
-| `propose` | Propose your design | Challenge two assumptions; accept a justified defense or revision |
-| `auto` | Name the topic | Choose the appropriate mode |
+| `explain` | concepts, mechanisms | explaining it in your own words |
+| `predict` | behavior of code | `predict: <output and why>` before a small example runs once |
+| `propose` | designs, decisions | proposing; the agent attacks two assumptions |
+| `auto` | not sure | letting the agent pick |
 
-For the final reflection, type `reflect: <your conclusion and reasons>`. `agree:` and `disagree:` also work. They record your reasoning; they do not automatically open a gate. Claude must register evidence of the mechanism, transfer to a new case, and a limitation. If evidence is missing, it asks another question. One accepted reflection opens one turn of work, then the gate locks again.
+You answer in plain words and finish with `reflect: …` (or `agree:` / `disagree:`). You pass when your reflection shows how it works, applies it to a new case and names a limit. Reasoned disagreement passes too. If you are stuck, say so: you get a smaller question, then one hint.
 
-Concise answers count. Word lengths never determine whether you understood. When stuck, the help ladder is: your attempt, a smaller question, one minimal hint, another attempt. Claude challenges your reasoning respectfully.
-
-## Keep the question in view (optional `elenchus-ui`, Claude Code CLI)
-
-With `elenchus-ui` installed, the focus card stays directly above the input while tool calls and code scroll past:
-
-```text
-╭─────────────────────────────────────────────────────────────╮
-│ YOUR TURN  Elenchus · TLS handshakes · round 1/1             │
-│ What stops an attacker from impersonating the server?       │
-│ answer the challenge                                        │
-│ explain · /elenchus:focus full shows tool details            │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-The question has the strongest visual weight. The next action sits immediately below it. Purple means your turn, crimson means Claude is judging or setting up the next step, and teal means a work turn is open. Status is never communicated by color alone. On narrow terminals the secondary footer and round metadata drop away, keeping the question and next action. Very small terminals use Claude Code's scrollable band.
-
-Successful internal Elenchus tool calls become one short line. Errors, interrupted calls, ordinary project tools, and actual prediction results remain visible. This only changes presentation; Claude still receives the full tool results.
-
-- `/elenchus:focus`: repeat the current question and next step without advancing the gate.
-- `/elenchus:focus full`: show full internal tool details.
-- `/elenchus:focus compact`: return to the compact view (default).
-- `/elenchus:status`: inspect the current gate and recorded violations.
-
-The UI uses Claude Code's [mods API](https://code.claude.com/docs/en/plugins/mods/reference), and requires a build that supports function hooks. It is tested against 2.1.292. The UI is a separate plugin so that the gates run unchanged where the mods API does not exist.
-
-## Predict a specific execution
-
-Prediction gates are deliberately small Python or JavaScript examples:
-
-1. Claude writes the example and calls `prepare --runtime python|node --file relative/path --question "..."`. Additional local imports or data use repeated `--source` arguments.
-2. Elenchus records SHA-256 hashes of the registered files. You type your prediction.
-3. The CLI `run` verifies the hashes and executes copies of those exact bytes once in a temporary working directory, with a ten-second timeout. Arbitrary Bash and PowerShell commands remain locked.
-4. Claude shows the actual output beside your prediction and asks for your reflection. Your reflection is reviewed before the gate is completed or cards can be written.
-
-If a source changes after registration, the prediction expires. Claude must register the new code and ask you to predict again. The run slot is consumed before execution, including on interruption or failure. Full project builds, dependency installation, and general shell work belong to an assessed open turn.
-
-The temporary working directory reduces accidental project changes. It is **not an OS sandbox**: example code can still access absolute paths or external services. Use self-contained examples. The enforced boundary is the registered source snapshot and single execution, not isolation from the operating system.
-
-## Sessions, history, and cards
-
-Running gates live in `.elenchus/sessions/s-<hex-session-id>/state.json`. Every hook and CLI call uses the current session ID. Two Claude sessions cannot open or close each other's gates through the allowed CLI calls. OS file locks serialize changes within one session; unique temporary files make state writes atomic. Resuming the same session keeps its gate; a new session starts inactive. Old `.elenchus/state.json` learning records remain available as history, but its running gate is not copied into new sessions.
-
-Completed learning records live in `.elenchus/history/`, shared across sessions. `status` exposes recent topics, your wording, mistakes, and assessment evidence to Claude. Connection cards are added only when a genuinely related earlier topic exists. The first topic needs no invented connection.
-
-Cards land in `.elenchus/anki/basic.tsv` and `cloze.tsv`. In Anki, use File > Import. Headers set deck, note type, and tags; if your Anki version ignores them, pick Basic or Cloze and map the third column to tags. Card writes are serialized across sessions, and duplicate fronts are rejected. The plugin writes `.elenchus/.gitignore` so local learning records are ignored by Git.
-
-## Four enforcement layers (Claude Code)
-
-1. The Socratic skill defines the learning protocol, evidence criteria, help ladder, and concise replies.
-2. SessionStart and UserPromptSubmit inject the rules and current phase, including the session-specific CLI prefix.
-3. PreToolUse locks edits, arbitrary shell work, subagents, and non-read MCP calls. Predict allows example preparation before the prediction, then only the registered CLI run.
-4. Stop detects long locked replies, headings, code fences, missing questions, and unregistered moves. Ignored blocks produce a visible violation. It also pins valid learner-facing questions as a fallback if Claude did not register them explicitly.
-
-Understanding is still a model judgment. Evidence fields make that judgment explicit and reviewable; they cannot prove that a learner's reasoning is correct. Likewise, short answer leakage is a semantic problem that formatting checks cannot fully prevent.
-
-Path checks guard the plugin, `.elenchus`, settings files, and `hooks.json`. Shell text scanning during open turns is a speed bump, not protection against an adversarial model constructing a path from pieces. MCP read detection is based on tool names, not a guarantee about third-party behavior. The threat model is a model drifting away from a learning protocol.
-
-## The Mistral Vibe port
-
-`plugins/elenchus-vibe/` is a native Agent Plugins 1.0 plugin (`plugin.json` plus an `ai.mistral.vibe` extension) with the same engine, the same CLI, and the same state and cards. Vibe offers fewer hook events than Claude Code, so the enforcement wiring differs:
-
-1. Vibe has no prompt hook. The `pre_tool` hook (`ai.mistral.vibe/hooks.toml`, `strict = true`) reads the user's typed words from the session transcript at the first tool call of a turn, so attempts, predictions, reflections, and `/elenchus:` commands are recorded before the reply is judged. A `post_agent` fallback covers turns without tool calls.
-2. There is no injected briefing either. The skill instructs the agent to run `status` at the start of a turn; a bare `status` adopts the newest session and prints the exact CLI prefix, and every locked-tool denial repeats that prefix.
-3. The `post_agent` hook replaces the Stop hook: a violating reply is denied and the reason is injected as a retry message, so the agent can fix it within the same user turn. A repeated violation is recorded and shown to the user as a warning.
-4. There is no focus-card UI and no theme support; the pinned question lives in the state and surfaces through `status` and `/elenchus:focus`. Commands are user-invocable skills (`learn`, `off`, `status`, `focus`, `cards`), and the Socratic protocol itself is the model-only `socratic` skill.
-
-Tool gating uses Vibe tool names (`bash`, `git_bash`, `powershell`, `write_file`, `edit`, `run_typescript`, subagents, `connector_*` and `mcp__*` tools), and the machinery protection covers `.vibe/` and `hooks.toml` in addition to `.elenchus/` and the plugin tree. Sessions stay isolated by Vibe session ID, exactly as on Claude Code.
-
-## Colors and themes
-
-The palette remains cream `#FBF5F3`, purple `#7D5BA6`, navy `#000022`, teal `#3BCEAC`, and crimson `#C42847`. Cream is used for questions and teal for the next action on navy. Purple and crimson serve as badge backgrounds and borders, because they are not readable as small text on navy. Palette tests check contrast and the Anki CSS.
-
-For Anki, paste `anki/elenchus-card.css` (identical in `plugins/elenchus/anki/` and `plugins/elenchus-vibe/anki/`, a test keeps them equal) into your note type's Cards > Styling. Both light and night modes are supported, with distinct connection and mistake blocks.
-
-The optional **Elenchus** and **Elenchus Light** themes ship with `elenchus-ui` and are available through `/theme` on compatible builds. They change the CLI palette; the focus card handles hierarchy and question visibility. Claude Code does not set the terminal background. For the full dark palette, set your terminal background to `#000022`. After changing `plugins/elenchus-ui/hooks/palette.ts`, run `python plugins/elenchus-ui/scripts/gen_theme.py`; theme tests detect stale generated files.
-
-## The Codex port
-
-Codex implements the same hook protocol as Claude Code: the same event names, `permissionDecision: "deny"` for PreToolUse, `decision: "block"` on Stop, exit code 2, and it sets `CLAUDE_PLUGIN_ROOT` for compatibility. So `plugins/elenchus` serves both hosts from one engine and one `hooks/hooks.json`. Codex reads `.codex-plugin/plugin.json`, which points it at `codex/skills/` (the Socratic skill with Codex tool names, plus `elenchus-learn`, `elenchus-off`, `elenchus-status`, `elenchus-focus`, `elenchus-cards`). Claude Code ignores both.
-
-What the engine adapts when `PLUGIN_ROOT` is set (Codex sets it, Claude Code does not):
-
-1. File edits arrive as `apply_patch`. It counts as a write tool, and the target paths are read from the patch text (`*** Update File:`, `*** Move to:`), so the machinery protection still holds.
-2. Shell input may be a string, an argv list (`["bash", "-lc", "..."]`) or `cmd`. All three are normalized before the CLI check.
-3. `update_plan` and `view_image` stay available while locked. Hosted tools such as web search are not intercepted by Codex hooks at all.
-4. Commands are recognized as `elenchus learn ...`, `$elenchus-learn ...` or `$elenchus:learn ...`, because Codex plugins have no slash commands.
-5. Wording names Codex and the shell tool instead of Claude and Bash.
-
-`tests/test_codex.py` replays Codex payloads against the engine, including the full Claude suite under the Codex environment. It does not replace a live Codex session. Codex's own documentation calls hooks "a useful guardrail, not a complete enforcement boundary"; the threat model here is the same as on Claude Code: a model drifting away from a learning protocol, not an adversary.
-
-## Ownership: owner's papers
-
-`plugins/ownership` keeps AI-assisted projects yours without slowing development down. The ideas, decisions and reasons come from you; code and configuration may come from the agent. One skill, `paper`, works the same for new and existing projects.
-
-Each project has an owner's paper in Typst with three sections: Purpose, Decisions, Limits and open questions. Every decision is in one of three states:
-
-- `inherited`: it is in the project, but you have not made it yours.
-- `mine`, untested: you made it or took it over, and wrote why.
-- owned: you passed an Elenchus gate on it. Writing a reason is not enough; you answer, explain and defend under questioning.
-
-On an existing project the agent starts by listing the decisions it finds in the code as inherited (what and where, never why). On a new project you write your decisions as you make them, and the agent logs every decision it makes on its own while building as inherited, in the same turn. Either way a decision becomes owned the same way: you write its why (or replace it with a better one), pass an Elenchus gate whose topic is the decision, and run `own`. That copies the gate record, with your words and the assessed evidence, into `gates/` next to the paper and binds its id to the decision. A project is owned when every decision is. You choose when to gate; building is never blocked by it.
-
-```sh
-python plugins/ownership/scripts/ownership.py install          # once: the Typst package @local/ownership
-python plugins/ownership/scripts/ownership.py init docs/paper --name my-project
-python plugins/ownership/scripts/ownership.py own docs/paper/main.typ "Threshold chosen on dev"   # after passing its gate
-python plugins/ownership/scripts/ownership.py ledger -v        # owned or not, tested/inherited, code changed since the paper
-python plugins/ownership/scripts/ownership.py cards docs/paper/main.typ   # Anki TSV, deck Elenchus::Ownership::<project>
-```
-
-The Typst contract is two functions: `#decision("title", origin: "mine", where: "file:line", gate: "<id>")` and `#card("question", "answer")`. Keep each `#decision` on one line; `own` edits it. Everything else is derived with `typst query`, so the paper is the only source.
-
-Where a paper lives: in `docs/paper/` of a private repository you own; in your retention library under `projects/<name>/` for public repositories and code you do not own. Personal paths stay out of this repository, in `~/.config/ownership/config.json` (or `$OWNERSHIP_CONFIG`):
-
-```json
-{"library": "C:/Users/you/Documents/retention-library",
- "projects": ["C:/Users/you/Documents/a-private-repo"],
- "anki_dir": "C:/Users/you/Documents/retention-library/anki"}
-```
-
-The tooling needs Python 3.8+ and Typst (the CLI, or `pip install typst`).
-
-## Runtime and tests
-
-Requirements: Python 3.8+, `sh` (Git for Windows provides it), and Node.js only for JavaScript prediction examples. `scripts/run.sh` finds a working Python and skips Microsoft Store stubs. If the engine cannot run, PreToolUse fails closed whenever it finds an active or unreadable state in the project. Without Python it conservatively considers every session here, because it cannot safely parse the session ID. Restore Python before trying to disable a gate.
-
-The reply cap is `ELENCHUS_MAX_WORDS` (default 80); required probe rounds are `MIN_ROUNDS` in `scripts/elenchus.py` (identical in both plugins). Learner answers have no hard word minimum.
-
-```sh
-python plugins/elenchus/tests/test_gates.py
-python plugins/elenchus/tests/test_codex.py
-python plugins/elenchus/tests/test_crossos.py
-python plugins/elenchus/tests/test_launcher.py
-python plugins/elenchus-ui/tests/test_palette.py
-python plugins/elenchus-ui/tests/test_theme.py
-python plugins/elenchus-vibe/tests/test_gates.py
-python plugins/ownership/tests/test_ownership.py
-claude plugin validate .
-claude plugin test plugins/elenchus
-claude plugin validate claude
-```
-
-Integration tests cover short answers, disagreement, mandatory review, evidence, hints, registered executions, source changes, imports, session isolation, concurrent writes, cards, and focus commands, on both engines; the mistral suite adds transcript-driven prompt recording, retry-message filtering, and the post_agent nudge and warning flow. Mods tests run against the real UI engine, including narrow layouts and full/compact tool rendering. A headless Claude Code smoke test also verified activation, the first Socratic question, and its persisted focus state. These checks do not replace a live interactive learning session.
-
-For a live check, start a learning gate in a throwaway project, verify the question remains beside the input, ask for a premature file edit, and check that it is denied. Open a second session and confirm its gate is independent. Use `elenchus learn explain <topic>` if slash-command expansion is unavailable; command files also carry an `ELENCHUS-COMMAND` marker.
+How the gates are enforced on each host, the repository layout and the tests: [docs/internals.md](docs/internals.md).

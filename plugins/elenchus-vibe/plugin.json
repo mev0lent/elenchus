@@ -1,9 +1,13 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "elenchus",
-  "version": "0.5.0",
-  "description": "Socratic learning gates for Mistral Vibe. Explain, predict, or propose first; advance on assessed understanding, including reasoned disagreement.",
-  "keywords": ["learning", "socratic", "anki"],
+  "version": "0.7.0",
+  "description": "Socratic gates and owner's papers. Explain, predict or propose first; own a project decision by passing a gate on it.",
+  "keywords": [
+    "learning",
+    "socratic",
+    "anki"
+  ],
   "extensions": {
     "ai.mistral.vibe": {
       "schemaVersion": 1,

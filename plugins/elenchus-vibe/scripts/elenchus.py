@@ -31,6 +31,9 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import paper  # noqa: E402  (owner's paper, shared with the other engine)
+
 SCRIPT = Path(__file__).resolve()
 ROOT = SCRIPT.parent.parent
 WIN = os.name == "nt" or os.environ.get("ELENCHUS_FORCE_WIN") == "1"
@@ -38,7 +41,7 @@ WIN = os.name == "nt" or os.environ.get("ELENCHUS_FORCE_WIN") == "1"
 MODES = ("explain", "predict", "propose")
 MIN_ROUNDS = {"explain": 1, "propose": 2}
 MAX_WORDS = int(os.environ.get("ELENCHUS_MAX_WORDS", "80"))
-CLI_CMDS = ("gate", "challenge", "verdict", "assess", "prepare", "run", "question", "status", "cards")
+CLI_CMDS = ("gate", "challenge", "verdict", "assess", "prepare", "run", "question", "status", "cards", "paper")
 
 
 # ---------------------------------------------------------------- paths
@@ -87,7 +90,7 @@ MCP_WRITE = re.compile(
     r"restore|duplicate|convert|insert|post|publish|commit|stage|bash|exec|run)", re.I)
 
 CTRL_RE = re.compile(
-    r"^\s*(?:/elenchus:|elenchus[:\s]+|ELENCHUS-COMMAND\s+)(learn|off|status|focus|cards)\b([^\n]*)", re.I)
+    r"^\s*(?:/elenchus:|elenchus[:\s]+|ELENCHUS-COMMAND\s+)(learn|own|paper|off|status|focus|cards)\b([^\n]*)", re.I)
 AGREE_RE = re.compile(r"^\s*agree\s*:\s*(.+)$", re.I | re.S)
 REFLECT_RE = re.compile(r"^\s*(?:reflect|disagree)\s*:\s*(.+)$", re.I | re.S)
 PREDICT_RE = re.compile(r"^\s*predict\s*:\s*(.+)$", re.I | re.S)
@@ -101,6 +104,9 @@ DEFAULT = {
     "run_spec": None, "run_result": None,
     "ui_details": False,
     "housekeeping_turn": -1,
+    "own": "",
+    "own_brief": "",
+    "notice": "",
     "prompt_ids": [], "turn_nudges": 0,
 }
 
@@ -210,7 +216,11 @@ def history(d: Path):
     return sorted(unique.values(), key=lambda c: c.get("created", 0))[-200:]
 
 
+LAST_DIR = [None]  # the state dir of the current call, so typed commands can find the paper
+
+
 def load(d: Path) -> dict:
+    LAST_DIR[0] = d
     s = copy.deepcopy(DEFAULT)
     f = d / "state.json"
     if f.exists():
@@ -308,6 +318,8 @@ def briefing(s: dict, note: str = "") -> str:
         lines.append(f"Hook note: {note}")
     if s.get("last_violation"):
         lines.append(f"VIOLATION ON RECORD: last turn you broke a rule ({s['last_violation']}). The user was shown a warning. Do not repeat it.")
+    if s.get("own_brief") and s["active"]:
+        lines.append(s["own_brief"])
     lines.append(f"Next: {fmt(s['phase'], s)}")
     if s["focus_question"]:
         lines.append(f"Pinned question: {s['focus_question']}")
@@ -470,10 +482,20 @@ def handle_prompt_text(s: dict, prompt: str) -> str:
         verb, rest = m.group(1).lower(), m.group(2)
         s["turn"] += 1
         if verb == "off":
-            s.update(active=False, phase="idle", last_violation="")
+            s.update(active=False, phase="idle", last_violation="", own="", own_brief="")
             return "off"
+        if verb == "own" and rest.strip():
+            title = rest.strip().strip('"')
+            pp = paper_of(LAST_DIR[0]) if LAST_DIR[0] else None
+            dec, problem = paper.readiness(pp, title) if pp else (None, "This project has no owner's paper yet; /elenchus:paper starts one.")
+            if problem:
+                s["notice"] = "NOT READY TO OWN: " + problem + " Tell the user exactly this. Do not write the formal statement for them."
+            else:
+                start(s, "propose " + dec["title"])
+                s["own"], s["own_brief"] = dec["title"], paper.gate_brief(pp, dec["title"])
         if verb == "learn":
             start(s, rest)
+            s["own"] = s["own_brief"] = ""
         if verb == "focus":
             if rest.strip().lower() in ("full", "compact"):
                 s["ui_details"] = rest.strip().lower() == "full"
@@ -875,10 +897,15 @@ def cmd_assess(d, s, a):
     verdict.update(note=a.note[:1500], evidence=evidence, missed=a.missed or verdict.get("missed", ""))
     s["verdict"] = verdict
     complete(d, s, "reconcile" if s["mode"] == "predict" else "reflection")
+    owned = ""
+    if s.get("own"):
+        p = paper_of(d)
+        owned = paper.bind(p, s["own"], s["completed"][-1]) if p else "No paper found; run `paper bind` after /elenchus:paper."
+        s["own"] = s["own_brief"] = ""
     s["phase"] = "open"
     s["focus_question"] = ""
     save(d, s)
-    print("Understanding accepted. One turn of work is open.")
+    print("Understanding accepted. One turn of work is open." + (f" {owned}." if owned else ""))
 
 
 def source_path(name, cwd):
@@ -1016,7 +1043,79 @@ def cmd_cards(d, s, a):
     print(f"Card added to {path.name} ({total} total).")
 
 
+def paper_of(d: Path):
+    edir = project_dir(d)
+    return paper.find(edir.parent, edir)
+
+
+PAPER_SETUP = ("The user wants an owner's paper for this project. Ask once where it should live: inside this repository "
+               "(docs/paper, only if the repository is private and theirs) or in their own notes folder (public repositories, "
+               "code they do not own). For employer or client work, first ask whether they may keep notes outside those "
+               "systems; without a clear yes, do not create the paper. Then run `{cli} paper init --path <folder> --name <project>`. Offer a recall check "
+               "before anything else: they write recall.md next to the paper from memory, without the code and without you. "
+               "When they are ready, add every decision you find in the code as one line under '== Decisions': "
+               '#decision("what was decided", origin: "inherited", where: "file:line"). What and where, never why. '
+               "Finish with `{cli} paper status`.")
+PAPER_SHOW = ("Run `{cli} paper status` and `{cli} paper build`, and report both briefly: the state, the PDF path, "
+              "or the Typst error to fix. If the paper has #card lines, also run `{cli} paper cards`. "
+              "Suggest the next decision to formalize or own, foundations first. "
+              "Decisions marked [not formalized] need a labeled equation, invariant, definition or algorithm, "
+              "written by the user, before /elenchus:own accepts them.")
+
+
+def cmd_paper(d, s, a):
+    if a.sub == "init":
+        edir = project_dir(d)
+        p = paper.init(edir.parent, edir, a.path, a.name)
+        print(f"Paper ready: {p}")
+        return
+    if a.sub == "status" and a.all:
+        print(paper.status_all())
+        return
+    p = paper_of(d)
+    if not p:
+        die("No owner's paper in this project yet. The user starts one with /elenchus:paper.")
+    if a.sub == "cards":
+        print(paper.cards(p, project_dir(d) / "anki"))
+        return
+    if a.sub == "status":
+        print(paper.status(p))
+        return
+    if a.sub == "build":
+        try:
+            print(f"PDF: {paper.build(p)}")
+        except RuntimeError as e:
+            die(f"Typst could not build the paper:\n{e}")
+        return
+    if a.sub == "check":
+        _, problem = paper.readiness(p, a.title)
+        print(problem or "Ready: the decision is formalized and every label resolves. The user can start /elenchus:own.")
+        return
+    # bind: one passed gate of this project (any session) to a formalized decision,
+    # e.g. a gate that covered several closely related decisions
+    _, problem = paper.readiness(p, a.title)
+    if problem:
+        die(problem)
+    recs = []
+    for f in (project_dir(d) / "history").glob("*.json"):
+        try:
+            recs.append(json.loads(f.read_text(encoding="utf-8")))
+        except ValueError:
+            continue
+    recs = sorted((r for r in recs if not a.gate or r.get("id") == a.gate), key=lambda r: r.get("created", 0))
+    if not recs:
+        die("No passed gate in this project." if not a.gate else f"Gate {a.gate} not found in this project.")
+    print(paper.bind(p, a.title, recs[-1]))
+
+
 def cmd_status(d, s, a):
+    pp = paper_of(d)
+    if s.get("notice"):
+        print(s["notice"])
+        s["notice"] = ""
+        save(d, s)
+    if pp:
+        print(paper.session_note(pp, cli_prefix(s)))
     if not s["active"]:
         print("Elenchus is inactive. The user starts it with /elenchus:learn.")
         return
@@ -1066,6 +1165,20 @@ def cli_main(argv):
     ad.add_argument("--tags", default="")
     ad.add_argument("--cloze", action="store_true")
     ks.add_parser("list")
+    pp = sub.add_parser("paper")
+    ps = pp.add_subparsers(dest="sub", required=True)
+    pi = ps.add_parser("init")
+    pi.add_argument("--path", required=True)
+    pi.add_argument("--name", required=True)
+    pst = ps.add_parser("status")
+    pst.add_argument("--all", action="store_true")
+    ps.add_parser("build")
+    ps.add_parser("cards")
+    pc = ps.add_parser("check")
+    pc.add_argument("--title", required=True)
+    pb = ps.add_parser("bind")
+    pb.add_argument("--title", required=True)
+    pb.add_argument("--gate", default="")
     a = ap.parse_args(argv)
     if not a.session and a.cmd == "status":
         a.session = latest_session(state_dir(None, ""))
@@ -1075,7 +1188,8 @@ def cli_main(argv):
         s["session_id"] = a.session
         handler = {"gate": cmd_gate, "challenge": cmd_challenge, "verdict": cmd_verdict,
                    "assess": cmd_assess, "prepare": cmd_prepare, "run": cmd_run,
-                   "question": cmd_question, "status": cmd_status, "cards": cmd_cards}[a.cmd]
+                   "question": cmd_question, "status": cmd_status, "cards": cmd_cards,
+                   "paper": cmd_paper}[a.cmd]
         if a.cmd == "cards":
             with locked(project_dir(d) / "anki"):
                 handler(d, s, a)

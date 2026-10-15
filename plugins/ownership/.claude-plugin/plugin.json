@@ -1,9 +1,0 @@
-{
-  "name": "ownership",
-  "version": "0.1.0",
-  "description": "Stay the owner of AI-assisted work: one owner's paper per project in Typst. Every decision is inherited, yours, or owned, and only a passed Elenchus gate makes it owned. Same flow for new and existing projects.",
-  "author": {
-    "name": "Niklas Heringer",
-    "url": "https://github.com/mev0lent"
-  }
-}
