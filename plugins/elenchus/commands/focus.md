@@ -1,5 +1,5 @@
 ---
-description: Show the current question. Use full for tool details or compact for a quiet focus view.
+description: Show the current question. With the optional elenchus-ui plugin, full shows tool details and compact restores the quiet focus view.
 argument-hint: [full|compact]
 ---
 ELENCHUS-COMMAND focus $ARGUMENTS

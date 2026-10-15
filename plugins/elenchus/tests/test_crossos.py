@@ -328,7 +328,7 @@ def scenario_packaging():
     check("every hook goes through run.sh", all(c.startswith('sh "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" hook-') for c in cmds))
     for f in ("scripts/run.sh", "scripts/elenchus.py", "hooks/hooks.json"):
         check(f"{f} has LF line endings", b"\r" not in (PLUGIN / f).read_bytes())
-    check(".gitattributes forces LF for sh and py", "*.sh text eol=lf" in (PLUGIN.parent / ".gitattributes").read_text())
+    check(".gitattributes forces LF for sh and py", "*.sh text eol=lf" in (PLUGIN.parent.parent / ".gitattributes").read_text())
     skill = (PLUGIN / "skills" / "socratic" / "SKILL.md").read_text(encoding="utf-8")
     check("skill has pre-flight check and rationalization table", "Pre-flight check" in skill and "Rationalizations" in skill)
     allfiles = [p for p in PLUGIN.rglob("*") if p.is_file() and ".git" not in p.parts and p.suffix in (".py", ".md", ".sh", ".json")]

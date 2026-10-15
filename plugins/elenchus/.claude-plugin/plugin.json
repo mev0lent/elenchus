@@ -1,0 +1,9 @@
+{
+  "name": "elenchus",
+  "version": "0.6.0",
+  "description": "Socratic learning gates with a persistent question focus. Explain, predict, or propose first; advance on assessed understanding, including reasoned disagreement.",
+  "author": {
+    "name": "Niklas Heringer",
+    "url": "https://github.com/mev0lent"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "elenchus-ui",
+  "version": "0.6.0",
+  "description": "Optional Claude Code CLI companion for Elenchus: a focus card that keeps the current question above the input, compact rendering of internal Elenchus tool calls, and two themes. Requires the elenchus plugin and a Claude Code build with the mods API.",
+  "author": {
+    "name": "Niklas Heringer",
+    "url": "https://github.com/mev0lent"
+  }
+}

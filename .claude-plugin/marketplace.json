@@ -1,0 +1,25 @@
+{
+  "name": "elenchus",
+  "owner": {
+    "name": "Niklas Heringer",
+    "url": "https://github.com/mev0lent"
+  },
+  "description": "Own your work while using AI: Socratic learning gates and an owner's paper per project.",
+  "plugins": [
+    {
+      "name": "elenchus",
+      "source": "./plugins/elenchus",
+      "description": "Socratic learning gates: explain, predict or propose first; work opens only after assessed understanding. Runs in Claude Code and Cowork."
+    },
+    {
+      "name": "elenchus-ui",
+      "source": "./plugins/elenchus-ui",
+      "description": "Optional, Claude Code CLI only: focus card beside the input, compact Elenchus tool rendering, two themes. Needs elenchus."
+    },
+    {
+      "name": "ownership",
+      "source": "./plugins/ownership",
+      "description": "Stay the owner of AI-assisted work: one owner's paper per project in Typst. Every decision is inherited, yours, or owned, and only a passed Elenchus gate makes it owned. Same flow for new and existing projects."
+    }
+  ]
+}

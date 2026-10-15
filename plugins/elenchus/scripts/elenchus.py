@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Elenchus gate engine (cross-platform: Linux, macOS, Windows via Git Bash).
+"""Elenchus gate engine for Claude Code, Cowork and Codex (Linux, macOS, Windows via Git Bash).
+
+Codex speaks the same hook protocol (event names, JSON fields, permissionDecision,
+Stop decision block) and sets CLAUDE_PLUGIN_ROOT for compatibility. The differences are
+tool names (apply_patch, update_plan) and the shell tool input, handled in the policy below.
 
 Hook handlers: hook-session, hook-prompt, hook-pretool, hook-stop.
 CLI: gate, challenge, verdict, status, cards.
@@ -63,6 +67,9 @@ _m = re.match(r"^([a-z]):(/.*)$", ROOT_F)
 ROOT_M = f"/{_m.group(1)}{_m.group(2)}" if _m else ""  # Git Bash spelling of the plugin dir
 SCRIPT_F = fwd(str(SCRIPT))
 CLI = f'"{slashes(sys.executable) or "python3"}" "{slashes(SCRIPT)}"'
+# Codex sets PLUGIN_ROOT (and CLAUDE_PLUGIN_ROOT for compatibility); Claude Code only the latter.
+HOST = "Codex" if os.environ.get("PLUGIN_ROOT") else "Claude"
+SHELL_NAME = "shell" if HOST == "Codex" else "Bash"
 
 # ---------------------------------------------------------------- policy
 
@@ -71,8 +78,10 @@ READ_TOOLS = {
     "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TodoWrite", "BashOutput",
     "AskUserQuestion", "SendUserMessage", "ListSkills", "SearchSkills",
     "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
+    # Codex local function tools that neither write nor execute
+    "update_plan", "view_image",
 }
-WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
 SHELL_TOOLS = {"Bash", "PowerShell"}
 MCP_READ = re.compile(r"(search|read|fetch|get|list|query)", re.I)
 MCP_WRITE = re.compile(
@@ -80,7 +89,7 @@ MCP_WRITE = re.compile(
     r"restore|duplicate|convert|insert|post|publish|commit|stage|bash|exec|run)", re.I)
 
 CTRL_RE = re.compile(
-    r"^\s*(?:/elenchus:|elenchus[:\s]+|ELENCHUS-COMMAND\s+)(learn|off|status|focus|cards)\b([^\n]*)", re.I)
+    r"^\s*(?:/elenchus:|[$@]?elenchus[:\s-]+|ELENCHUS-COMMAND\s+)(learn|off|status|focus|cards)\b([^\n]*)", re.I)
 AGREE_RE = re.compile(r"^\s*agree\s*:\s*(.+)$", re.I | re.S)
 REFLECT_RE = re.compile(r"^\s*(?:reflect|disagree)\s*:\s*(.+)$", re.I | re.S)
 PREDICT_RE = re.compile(r"^\s*predict\s*:\s*(.+)$", re.I | re.S)
@@ -105,11 +114,11 @@ IRON_RULES = """ELENCHUS IRON RULES. The user installed this on purpose. Being h
 6. Hooks deny your tools and block your reply when you break these rules, and the user is shown every violation."""
 
 NEXT = {
-    "need_gate": "No gate set. Choose the mode that fits (explain: ideas, theory, science. predict: code. propose: brainstorming, design), run `{cli} gate --mode M --topic T` with the Bash tool, then ask ONE opening question. No answer, no lecture.",
+    "need_gate": "No gate set. Choose the mode that fits (explain: ideas, theory, science. predict: code. propose: brainstorming, design), run `{cli} gate --mode M --topic T` with the {shell} tool, then ask ONE opening question. No answer, no lecture.",
     "await_attempt": "Ask ONE opening question that forces the user to produce their own explanation or proposal. Do not reveal the answer. Stay under {maxw} words and end with the question.",
     "attempted": "The user made an attempt. Do not teach. Register your move now: `{cli} challenge --text \"...\"` with the sharpest flaw, gap, edge case or probing question, or `{cli} verdict --note \"...\"` if the requirements are met. Then ask your question and end the turn.",
     "challenging": "Waiting for the user's answer to your challenge. Do not answer it for them. Stay under {maxw} words and end with a question.",
-    "verdict_ok": "Verdict recorded. Ask for `reflect: <your conclusion and reasons>` (agree: and disagree: also work). Agreement with Claude is not required. The reflection must be assessed before opening.",
+    "verdict_ok": "Verdict recorded. Ask for `reflect: <your conclusion and reasons>` (agree: and disagree: also work). Agreement with {host} is not required. The reflection must be assessed before opening.",
     "review": "Reflection received; tools remain locked. Run `assess --result accept --mechanism ... --transfer ... --limit ... --note ...` only for sound understanding, including reasoned disagreement. Otherwise use `assess --result retry --question ...` with a smaller question or minimal hint. Never accept solely because it is long.",
     "open": "Gate is open for THIS turn only. You may now correct, extend and reveal, do the approved work, and write cards with `{cli} cards add`. Build on the user's own words.",
     "await_prediction": "Write a small Python or JavaScript example, then register it with `prepare --runtime python|node --file relative/path --question ...` (repeat --source for local imports). Ask for `predict: <output and why>`. Nothing runs before this. Never reveal the output.",
@@ -264,7 +273,7 @@ def cli_prefix(s):
 
 
 def fmt(key: str, s=None) -> str:
-    return NEXT[key].format(cli=cli_prefix(s) if s else CLI, maxw=MAX_WORDS)
+    return NEXT[key].format(cli=cli_prefix(s) if s else CLI, maxw=MAX_WORDS, host=HOST, shell=SHELL_NAME)
 
 
 def briefing(s: dict, note: str = "") -> str:
@@ -272,7 +281,7 @@ def briefing(s: dict, note: str = "") -> str:
     lines = [
         f"ELENCHUS | mode={mode or 'unset'} | topic={s['topic']!r} | phase={s['phase']} | "
         f"rounds={s['rounds']}/{MIN_ROUNDS.get(mode, 0)}",
-        f"CLI (run it with the Bash tool, exactly this prefix): {cli_prefix(s)}",
+        f"CLI (run it with the {SHELL_NAME} tool, exactly this prefix): {cli_prefix(s)}",
     ]
     if note:
         lines.append(f"Hook note: {note}")
@@ -479,7 +488,9 @@ def tokenize(cmd: str, ps: bool = False):
 
 
 def is_cli(cmd: str, ps: bool = False, cwd: str = "", session_id: str = "") -> bool:
-    c = cmd.replace("${CLAUDE_PLUGIN_ROOT}", ROOT_RAW).replace("$CLAUDE_PLUGIN_ROOT", ROOT_RAW)
+    c = cmd
+    for var in ("CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"):
+        c = c.replace("${" + var + "}", ROOT_RAW).replace("$" + var, ROOT_RAW)
     toks = tokenize(c, ps)
     if not toks:
         return False
@@ -509,12 +520,36 @@ def protected(path: str, cwd: str) -> bool:
         return True
     if f == ROOT_F or f.startswith(ROOT_F + "/"):
         return True
-    return "/.claude/settings" in f or f.endswith("/hooks.json")
+    return "/.claude/settings" in f or "/.codex/config" in f or f.endswith("/hooks.json")
 
 
 def touches_machinery(cmd: str) -> bool:
     lc = slashes(cmd).lower()
-    return ".elenchus" in lc or ".claude/settings" in lc or "hooks.json" in lc or ROOT_F in lc or bool(ROOT_M and ROOT_M in lc)
+    return ".elenchus" in lc or ".claude/settings" in lc or ".codex/config" in lc or "hooks.json" in lc or ROOT_F in lc or bool(ROOT_M and ROOT_M in lc)
+
+
+PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$", re.M)
+
+
+def patch_paths(tool: str, ti: dict) -> list:
+    """Codex edits files with apply_patch; its targets live in the patch text, not in file_path."""
+    if tool != "apply_patch":
+        return []
+    text = ti.get("command") or ti.get("input") or ti.get("patch") or ""
+    if isinstance(text, list):
+        text = "\n".join(str(x) for x in text)
+    return [a or b for a, b in PATCH_FILE.findall(str(text))]
+
+
+def shell_command(ti: dict) -> str:
+    """Claude Code sends a command string. Codex may send a string, an argv list, or cmd."""
+    cmd = ti.get("command") if ti.get("command") is not None else ti.get("cmd", "")
+    if isinstance(cmd, list):
+        # ["bash", "-lc", "<script>"] carries the script last; anything else is plain argv
+        if len(cmd) >= 3 and str(cmd[-2]) in ("-c", "-lc"):
+            return str(cmd[-1])
+        return " ".join(str(x) for x in cmd)
+    return cmd if isinstance(cmd, str) else ""
 
 
 def mcp_read_only(tool: str) -> bool:
@@ -530,12 +565,13 @@ def hook_pretool(p: dict) -> None:
     if not s["active"]:
         return
     tool, ti, cwd = p.get("tool_name", ""), p.get("tool_input") or {}, p.get("cwd", "")
-    for k in ("file_path", "notebook_path", "path"):
-        v = ti.get(k)
+    if not isinstance(ti, dict):
+        ti = {}
+    for v in [ti.get(k) for k in ("file_path", "notebook_path", "path")] + patch_paths(tool, ti):
         if isinstance(v, str) and v and protected(v, cwd):
             return deny("ELENCHUS: the gate machinery (.elenchus, the plugin, hook and settings files) is off limits. Use the CLI.")
     if tool in SHELL_TOOLS:
-        cmd = ti.get("command", "") or ""
+        cmd = shell_command(ti)
         if is_cli(cmd, tool == "PowerShell", cwd, s["session_id"]):
             return
         if touches_machinery(cmd):
@@ -669,7 +705,7 @@ def hook_stop(p: dict) -> None:
             return out({"decision": "block", "reason": reason})
         s["violations"] += 1
         s["last_violation"] = reason[:160]
-        warn = f"[+] Elenchus warning: Claude ignored a rule and ended its turn anyway. {reason.replace(TAG, '').strip()[:160]}"
+        warn = f"[+] Elenchus warning: {HOST} ignored a rule and ended its turn anyway. {reason.replace(TAG, '').strip()[:160]}"
     if s["phase"] == "open":
         s["phase"] = "idle"
         reset_gate(s)

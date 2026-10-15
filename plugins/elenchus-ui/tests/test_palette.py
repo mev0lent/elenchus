@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Keeps the three places that hold the Elenchus colors in agreement:
-hooks/palette.ts (the band), anki/elenchus-card.css (the cards) and the command hooks
-that coexist with the UI module in hooks/hooks.json."""
+"""Keeps the places that hold the Elenchus colors in agreement: hooks/palette.ts (the band,
+in this optional UI plugin) and anki/elenchus-card.css (the cards, in the core plugin). Also checks
+that the UI module stays out of the core plugin, so the core runs on hosts without the mods API."""
 import json
 import re
 import sys
@@ -29,7 +29,8 @@ def contrast(a, b):
 
 
 ts = (PLUGIN / "hooks" / "palette.ts").read_text(encoding="utf-8")
-css = (PLUGIN / "anki" / "elenchus-card.css").read_text(encoding="utf-8")
+CORE = PLUGIN.parent / "elenchus"
+css = (CORE / "anki" / "elenchus-card.css").read_text(encoding="utf-8")
 palette = dict(re.findall(r"^\s+(\w+): '(#[0-9A-Fa-f]{6})',?$", ts.split("export type Tone")[0], re.M))
 
 check("palette.ts defines the five colors", set(palette) == {"cream", "purple", "navy", "teal", "crimson"})
@@ -54,9 +55,13 @@ night = css.split(".nightMode .card")[1]
 check("night mode never sets purple or crimson as text color",
       not re.search(r"(?<!-)color:\s*#(7D5BA6|C42847)", night, re.I))
 
-hooks = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-check("hooks.json names the UI module", hooks.get("modules") == ["./register.tsx"])
-check("hooks.json still carries the command hooks", set(hooks.get("hooks", {})) == {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"})
+ui_hooks = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+check("UI hooks.json names only the UI module", ui_hooks == {"modules": ["./register.tsx"]})
+core_hooks = json.loads((CORE / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+check("core hooks.json has no UI module", "modules" not in core_hooks)
+check("core hooks.json carries the command hooks", set(core_hooks.get("hooks", {})) == {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"})
+check("vibe card css matches the core card css",
+      (PLUGIN.parent / "elenchus-vibe" / "anki" / "elenchus-card.css").read_bytes() == (CORE / "anki" / "elenchus-card.css").read_bytes())
 check("module files exist", (PLUGIN / "hooks" / "register.tsx").exists() and (PLUGIN / "hooks" / "palette.ts").exists())
 check("palette.ts has no em-dashes", chr(0x2014) not in ts)
 

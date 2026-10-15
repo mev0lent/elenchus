@@ -1,0 +1,7 @@
+[package]
+name = "ownership"
+version = "0.1.0"
+entrypoint = "ownership.typ"
+authors = ["Niklas Heringer"]
+license = "MIT"
+description = "The contract between owner's papers and the ownership tooling: status and cards."

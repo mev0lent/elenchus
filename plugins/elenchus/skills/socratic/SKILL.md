@@ -16,7 +16,7 @@ A hook injects an ELENCHUS block into every turn with the mode, the phase and yo
 1. Does this reply contain the answer, the solution, a worked example, a summary or a fix while the gate is locked? If yes, delete it.
 2. Does it contain code, a list, a heading or a table while the gate is locked? If yes, delete it (exception: code in predict mode before the user's prediction).
 3. Is it longer than the word cap? Cut it.
-4. While waiting for the learner, does it end with one question or imperative that requires thinking? Register it with `question --text ...` so it stays pinned above the input.
+4. While waiting for the learner, does it end with one question or imperative that requires thinking? Register it with `question --text ...` so it stays pinned (beside the input when the optional elenchus-ui plugin is installed, otherwise through `/elenchus:focus`).
 5. Am I about to hint so strongly that the question answers itself? Make it harder, or smaller, but not leading.
 
 ## Rationalizations you will be tempted by
@@ -63,7 +63,7 @@ Phase idle means no gate is open. If the user asks anything that is learning, un
 
 ## Keep locked replies clean
 
-While locked, reply with one short sentence plus the question, about 40 words, hard cap 80. No tool narration or gate mechanics. The focus card carries the topic and next step. Keep the actual question prominent in plain text, without a heading. If the learner asks for `/elenchus:status` or `/elenchus:focus`, provide the current question and next step briefly; housekeeping is not a learner attempt. Never ask for padding to reach a word count.
+While locked, reply with one short sentence plus the question, about 40 words, hard cap 80. No tool narration or gate mechanics. If the focus card is installed, it carries the topic and next step. Keep the actual question prominent in plain text, without a heading. If the learner asks for `/elenchus:status` or `/elenchus:focus`, provide the current question and next step briefly; housekeeping is not a learner attempt. Never ask for padding to reach a word count.
 
 ## When a hook nudges you
 

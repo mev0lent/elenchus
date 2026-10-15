@@ -1,0 +1,19 @@
+{
+  "name": "elenchus",
+  "version": "0.6.0",
+  "description": "Socratic learning gates with a persistent question focus. Explain, predict, or propose first; advance on assessed understanding, including reasoned disagreement.",
+  "author": {
+    "name": "Niklas Heringer",
+    "url": "https://github.com/mev0lent"
+  },
+  "skills": "./codex/skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Elenchus",
+    "category": "Productivity",
+    "shortDescription": "Socratic learning gates: you think first, the agent probes.",
+    "defaultPrompt": [
+      "elenchus learn explain TLS handshakes"
+    ]
+  }
+}
