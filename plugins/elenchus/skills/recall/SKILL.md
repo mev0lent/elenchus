@@ -10,4 +10,4 @@ Load the `socratic` skill and follow the ELENCHUS block the hook added to this t
 
 Ask the user to reproduce from memory what they concluded and why. Do not show, quote or paraphrase their old entry before they have answered. Then probe what faded or changed, and say plainly what held. One question per turn, under the word cap.
 
-On Mistral Vibe no ELENCHUS block is added to the turn: first run `python3 <plugin>/scripts/elenchus.py status` with the shell tool, where `<plugin>` is the folder two levels above this file (usually `~/.vibe/plugins/elenchus`). It prints the block and the exact CLI prefix for every other command.
+On Mistral Vibe, use the phase and session prefix already supplied by a CLI or tool result. If none is available, bootstrap once with `python3 <plugin>/scripts/elenchus.py status --brief`, where `<plugin>` is two directories above this file (usually `~/.vibe/plugins/elenchus`). Do not fetch status again just to verify a successful move.

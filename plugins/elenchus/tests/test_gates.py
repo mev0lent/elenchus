@@ -84,6 +84,89 @@ class Gates(unittest.TestCase):
         self.assertEqual(self.cli("gate", "--mode", "propose", "--topic", "cache key").returncode, 0)
         self.assertTrue(self.denied("Bash", command="echo later"))
 
+    def test_fast_gates_record_challenges_without_cli_round_trips(self):
+        for mode, rounds in (("explain", 1), ("propose", 2), ("decide", 1)):
+            with self.subTest(mode=mode):
+                self.prompt(f"/elenchus:learn {mode} TLS", mode)
+                self.hook("stop", mode, last_assistant_message="What would you do, and why?")
+                self.assertIn("What would", self.state(mode)["focus_question"])
+                self.prompt("Trust the issuer because it signs the key.", mode)
+                for n in range(rounds):
+                    result = self.hook("stop", mode, last_assistant_message="What if the issuer is compromised?")
+                    self.assertNotIn('"block"', result.stdout)
+                    self.assertNotIn('"deny"', result.stdout)
+                    self.assertEqual((self.state(mode)["phase"], self.state(mode)["rounds"]), ("challenging", n + 1))
+                    self.assertTrue(self.denied("Write", sid=mode, file_path="answer.txt"))
+                    self.hook("stop", mode, last_assistant_message="What if the issuer is compromised?")
+                    self.assertEqual(self.state(mode)["rounds"], n + 1)
+                    self.prompt("Then a forged identity can pass verification.", mode)
+                if mode == "decide":
+                    result = self.cli("assess", "--result", "accept", "--note", "Trust a controlled issuer.", sid=mode)
+                else:
+                    result = self.cli("verdict", "--note", "Sound reasoning.", sid=mode)
+                    self.assertEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("phase=verdict_ok", result.stdout)
+                    result = self.hook("stop", mode, last_assistant_message="What is your conclusion, and what reasons support it?")
+                    self.assertNotIn('"block"', result.stdout)
+                    self.assertNotIn('"deny"', result.stdout)
+                    self.prompt("my takeaway is that trust depends on the issuer's signing key.", mode)
+                    self.assertEqual(self.state(mode)["phase"], "review")
+                    result = self.accept(mode)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn("phase=open", result.stdout)
+
+    def test_automatic_challenges_reject_lectures_and_ignore_housekeeping(self):
+        self.prompt("/elenchus:learn explain TLS")
+        self.prompt("The issuer signs the key.")
+        self.hook("stop", last_assistant_message="word " * 90 + "What breaks it?")
+        self.assertEqual((self.state()["phase"], self.state()["rounds"]), ("attempted", 0))
+        self.prompt("/elenchus:focus")
+        self.hook("stop", last_assistant_message="What breaks it?")
+        self.assertEqual((self.state()["phase"], self.state()["rounds"]), ("attempted", 0))
+
+    def test_transition_errors_and_brief_status_supply_the_next_move(self):
+        self.prompt("/elenchus:learn explain TLS")
+        self.prompt("The issuer signs the key.")
+        result = self.cli("assess", "--result", "accept", "--note", "Too soon")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("phase=attempted", result.stdout)
+        self.assertIn("Next:", result.stdout)
+        self.assertEqual(self.state()["phase"], "attempted")
+        result = self.cli("status", "--brief")
+        self.assertIn("Next:", result.stdout)
+        self.assertNotIn("Earlier topics", result.stdout)
+
+    def test_ordinary_prompt_context_stays_within_the_fast_path_budget(self):
+        def context(result):
+            return json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertLess(len(context(self.prompt("/elenchus:learn explain TLS"))), 2500)
+        self.assertLess(len(context(self.prompt("The issuer signs the key."))), 1300)
+        skill = SCRIPT.parent.parent / "skills" / "socratic" / "SKILL.md"
+        self.assertLess(len(skill.read_text(encoding="utf-8")), 9000)
+
+    def test_gate_pins_its_question_in_one_call(self):
+        self.passed()
+        before = self.state()
+        self.assertNotEqual(self.cli("gate", "--mode", "decide", "--topic", "key", "--question", "no question").returncode, 0)
+        self.assertEqual(self.state(), before)
+        result = self.cli("gate", "--mode", "decide", "--topic", "key", "--question", "What key would you use, and why?")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.state()["focus_question"], "What key would you use, and why?")
+
+    def test_natural_reflection_records_objections_without_unlocking_or_repeating(self):
+        self.prompt("/elenchus:learn explain TLS")
+        self.prompt("my takeaway is that the issuer signs the key.")
+        self.assertEqual(self.state()["phase"], "attempted")
+        self.verdict()
+        self.prompt("yes")
+        self.assertEqual(self.state()["phase"], "verdict_ok")
+        self.prompt("But the issuer itself could be compromised.")
+        self.assertEqual(self.state()["phase"], "review")
+        self.assertIsNotNone(self.state()["verdict"])
+        self.assertIn("compromised", self.state()["agreement"]["text"])
+        self.assertTrue(self.denied("Write", file_path="answer.txt"))
+        self.assertNotEqual(self.cli("assess", "--result", "accept", "--note", "insufficient evidence").returncode, 0)
+
     def test_prose_is_not_a_command(self):
         self.prompt("/elenchus:learn explain TLS")
         self.prompt("elenchus off does not work for me")

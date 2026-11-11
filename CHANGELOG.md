@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.0 - 2026-11-11
+
+- Remove opening/question bookkeeping calls on all three hosts: Stop pins opening
+  questions and records ordinary challenges. Challenge counts and user answers remain
+  required; explicit `challenge` calls still work.
+- Add `gate --question` to start a decision and pin its opening question in one call.
+- Return the current phase and next action with transitions and CLI errors, avoiding
+  status/retry loops. Prediction runs retain JSON output with an added `next` field.
+- Treat plain reasoning and objections after verdict as reflections for assessment;
+  users no longer need to repeat their answer with a special prefix. No automatic pass.
+- Add Vibe 3.1 post_tool context delivery and `status --brief` for one-time bootstrap
+  or recovery. Stop requesting full status every turn and discard stale notices.
+- Shorten the shared protocol and briefings; search graph notes at gate opening, and
+  leave card creation for explicit requests.
+
+Start fresh host sessions after updating. Vibe pins plugin code per session; an old
+session may still run 0.10.0. Unix/WSL is the requested support scope; no native Windows
+validation was added. Model/server waiting time is outside Elenchus's timing control.
+
 ## 0.10.0 - 2026-11-11
 
 - Finish the 0.9.0 handoff with `choice --note`: record the agent's decision and reason

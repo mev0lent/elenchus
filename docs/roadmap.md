@@ -8,7 +8,7 @@ finish or stop part-way, and say what is left.
 
 - One engine serves Claude Code, Codex and Mistral Vibe: `plugins/elenchus/scripts/elenchus.py`.
   How each host is wired is in [internals.md](internals.md). Read "Mistral Vibe" there
-  before touching hooks: Vibe has no prompt hook and no context injection.
+  before touching hooks: installed Vibe 3.1 has no prompt hook; 0.11.0 uses its post_tool context support.
 - The user's words move gates, never the agent. A new way to open or close a gate must be
   triggered by text the user typed (`on_prompt`), not by a CLI call the agent can make.
 - Run every suite after each item. All must pass before you start the next one:
@@ -216,3 +216,26 @@ Validation for the continuation: all six engine suites, both Python UI checks,
 Claude marketplace validation, and all nine Claude UI/mod tests passed locally.
 Release publication is recorded by the Git history and the `v0.10.0` tag; the
 GitHub Checks workflow repeats the Python checks on pushes and tags.
+
+## Performance continuation: 0.11.0
+
+The user requested faster turns on all three hosts, supporting Unix/WSL; native
+Windows is outside the requested validation scope.
+
+- Stop records closing questions as challenges without a separate CLI/model round
+  trip. Required rounds, subsequent user answers, and assessments stay enforced.
+- Gate creation can pin its opening question with `--question`. Openings otherwise
+  pin automatically on Stop; ordinary challenges no longer need explicit registration.
+- Successful transitions and failed commands return the current phase and next action.
+  The prediction run keeps JSON output and adds a `next` field.
+- Plain reasoning after verdict enters reflection review. No repeated prefix or new
+  verdict is needed; agreement alone is still insufficient, and assessment is mandatory.
+- Vibe uses post_tool context once per locked turn; no repeated status polling or stale
+  prompt notices after a transition. Bootstrap/recovery can use `status --brief`.
+- Shorter shared instructions and briefings; cards are produced only on request.
+- [performance.md](performance.md) records measurements and their limits. Existing
+  Vibe sessions retain their pinned code: start a fresh session after upgrading.
+
+Validation: all six engine suites and both Python UI checks passed; all nine Claude
+UI/mod tests and marketplace validation passed. The installed Vibe 3.1 HookConfig
+also accepts all three hook entries. No live model latency bound is claimed.

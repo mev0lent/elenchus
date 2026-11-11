@@ -131,6 +131,33 @@ class Vibe(Gates):
         self.assertIn('--session "v"', out)
         self.assertNotIn("ELENCHUS IRON RULES", self.invoke(["status"]).stdout)  # delivered once
 
+    def test_ordinary_tool_result_supplies_context_once_per_turn(self):
+        self.say("/elenchus:learn explain TLS")
+        self.tool("file_system.read_file")
+        data = {"tool_name": "file_system.read_file", "tool_input": {"path": "notes.md"}}
+        context = self.vhook("posttool", **data)["hook_specific_output"]["additional_context"]
+        self.assertIn("phase=await_attempt", context)
+        self.assertIn('--session "v"', context)
+        self.assertEqual(self.vhook("posttool", **data), {})
+        self.say("The issuer signs the key.")
+        self.reply("What breaks if the issuer is compromised?")
+        self.assertEqual(self.vhook("stop"), {})
+        self.assertEqual((self.state("v")["phase"], self.state("v")["rounds"]), ("challenging", 1))
+        self.assertEqual(self.state("v")["notice"], "")
+        self.say("A forged identity can pass verification.")
+        command = f'"{sys.executable}" "{SCRIPT}" --session "v" verdict --note "Sound"'
+        self.assertFalse(self.blocked("file_system.bash", command=command))
+        self.assertEqual(self.cli("verdict", "--note", "Sound", sid="v").returncode, 0)
+        # A command already returned the current state; do not append the old attempted briefing.
+        self.assertEqual(self.vhook("posttool", tool_name="file_system.bash", tool_input={"command": command}), {})
+        self.tool("file_system.read_file")
+        context = self.vhook("posttool", **data)["hook_specific_output"]["additional_context"]
+        self.assertIn("phase=verdict_ok", context)
+        self.assertNotIn("phase=attempted", context)
+        self.say("/elenchus:off")
+        self.tool("file_system.read_file")
+        self.assertIn("ELENCHUS OFF", self.vhook("posttool", **data)["hook_specific_output"]["additional_context"])
+
     def test_own_through_the_journal(self):
         self.assertEqual(self.cli("paper", "init", "--path", "docs/paper", "--name", "demo", sid="v").returncode, 0)
         fill(self.cwd / "docs" / "paper" / "main.typ")
@@ -169,7 +196,7 @@ class Packaging(unittest.TestCase):
         self.assertRegex(next(iter(versions)), r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
         hooks = (PLUGIN / "ai.mistral.vibe" / "hooks.toml").read_text(encoding="utf-8")
         self.assertEqual(re.findall(r'^command = "(.+)"$', hooks, re.M),
-                         ["sh scripts/run.sh hook-pretool", "sh scripts/run.sh hook-stop"])
+                         ["sh scripts/run.sh hook-pretool", "sh scripts/run.sh hook-posttool", "sh scripts/run.sh hook-stop"])
         self.assertEqual(len(re.findall(r"^strict = true$", hooks, re.M)), 1)
 
 

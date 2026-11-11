@@ -4,10 +4,10 @@
 
 Codex speaks Claude Code's hook protocol (event names, JSON fields, permissionDecision,
 Stop decision block); it differs in tool names (apply_patch, update_plan) and shell input.
-Vibe has only pre_tool and post_agent hooks and injects no context: the engine reads the
-user's typed words from the session journal, and the agent reads its briefing with `status`.
+Vibe 3.1 reads user turns from its journal; post_tool carries the briefing without
+requiring a separate status call on every turn.
 
-Hook handlers: hook-session, hook-prompt, hook-pretool, hook-stop.
+Hook handlers: hook-session, hook-prompt, hook-pretool, hook-posttool, hook-stop.
 CLI: gate, challenge, verdict, assess, prepare, run, question, status, cards, paper, graph, choice.
 
 Gate state lives in .elenchus/sessions/<session-key>/state.json. Only the user's own typed
@@ -136,31 +136,32 @@ DEFAULT = {
     "own": "",
     "own_brief": "",    # extra briefing of an own gate or a recall gate
     "recall": False,    # this gate re-tests a note of the knowledge graph
-    "notice": "",       # Vibe: the briefing a prompt produced, printed by the next `status`
+    "notice": "",       # Vibe: prompt briefing, delivered by a tool result or status
     "prompt_ts": 0,     # Vibe: journal timestamp of the last user message already recorded
     "turn_nudges": 0,   # Vibe: reply corrections asked for in this turn
+    "briefed_turn": -1, # Vibe: ordinary tool results carry the briefing once per user turn
 }
 
-IRON_RULES = """ELENCHUS IRON RULES. The user installed this on purpose. Being helpful here means making them think, not finishing their thinking for them.
-1. While locked, never give the target answer, full explanation or working fix. No lists, headings or summaries. One question per turn, under {maxw} words. In predict preparation you may show the example code, without revealing its output.
-2. Work opens only after recorded user reasoning is assessed, or the user explicitly delegates a decision. Your judgment alone never opens it. explain: they explain first. propose: they propose first and you challenge assumptions. decide: they state their choice and the reason, you attack it once, they answer. predict: register the source before they type `predict:`, then use only the run CLI.
-3. "Just tell me" does not unlock a gate. Offer a smaller question, then one minimal hint if needed. Reasoned disagreement is a successful learning outcome. Only the user typing /elenchus:off disables this. In a decide or propose gate the user may hand the decision to you by typing `delegate: <remark>`; mention that only when they ask you to choose, never first.
-4. A complete answer given too early is the failure state, even when it is correct and the user is pleased.
-5. Keep it clean. While locked, a reply is at most one short sentence of acknowledgment plus the question. Never narrate hooks, blocked tools, gates, word minimums or what you could see in the repo. Do not summarize the project or the state. If the user asked something else, say in one sentence that it waits until the gate opens, then ask.
-6. Hooks deny your tools and block your reply when you break these rules, and the user is shown every violation."""
+IRON_RULES = """ELENCHUS IRON RULES. The user thinks first; you probe and assess.
+1. While locked: at most one short acknowledgment plus one question, under {maxw} words. No target answer, lecture, headings, or lists. Predict preparation may show code without output.
+2. Only the user's typed words record an attempt, prediction, reflection, delegation, or off command. Assess sound reasoning, including disagreement; never invent evidence or accept by length.
+3. Required answered challenges: explain 1, propose 2, decide 1. Explain/propose also need a user reflection and assessment. Decide ends with assess, without verdict/reflect. Predict uses one registered run, then reflection and assessment.
+4. Only the user can disable this. Mention delegate: only if they ask you to choose; own gates cannot be delegated. Blocked tools mean ask, never bypass.
+5. Follow Next with at most one bookkeeping call per ordinary turn. Its result is the verification. Do not repeat status, skill reads, or question after challenge/prepare. Stop pins closing questions. Cards wait until requested.
+6. Retry text follows a reply already visible to the user: add only the missing question, without repeating yourself."""
 
 NEXT = {
-    "need_gate": "No gate set. Choose the mode that fits (explain: ideas, theory, science. predict: code. propose: brainstorming, design. decide: one decision inside the work), run `{cli} gate --mode M --topic T` with the {shell} tool, then ask ONE opening question. No answer, no lecture.",
-    "await_attempt": "Ask ONE opening question that forces the user to produce their own explanation or proposal. Do not reveal the answer. Stay under {maxw} words and end with the question.",
-    "attempted": "The user made an attempt. Do not teach. Register your move now: `{cli} challenge --text \"...\"` with the sharpest flaw, gap, edge case or probing question, or `{cli} verdict --note \"...\"` if the requirements are met. A decide gate has no verdict: after one answered challenge, finish it with `{cli} assess --result accept --note \"<the decision and its reason, in the user's words>\"`. Then ask your question and end the turn.",
-    "challenging": "Waiting for the user's answer to your challenge. Do not answer it for them. Stay under {maxw} words and end with a question.",
-    "verdict_ok": "Verdict recorded. Ask for `reflect: <your conclusion and reasons>` (agree: and disagree: also work). Agreement with {host} is not required. The reflection must be assessed before opening.",
-    "review": "Reflection received; tools remain locked. Run `assess --result accept --mechanism ... --transfer ... --limit ... --note ...` only for sound understanding, including reasoned disagreement. Otherwise use `assess --result retry --question ...` with a smaller question or minimal hint. Never accept solely because it is long.",
-    "open": "Work is open: the user passed this gate, and it stays open until the next gate starts. Correct, extend and reveal, do the work they ask for, and write cards with `{cli} cards add`. Build on the user's own words. You build, the user decides: when the work reaches a decision that shapes the result (architecture, data model, algorithm, public interface, a real trade-off), do not make it. Run `{cli} gate --mode decide --topic \"<the decision>\"` and ask what they would do and why. Routine implementation choices are yours.",
-    "await_prediction": "Write a small Python or JavaScript example, then register it with `prepare --runtime python|node --file relative/path --question ...` (repeat --source for local imports). Ask for `predict: <output and why>`. Nothing runs before this. Never reveal the output.",
-    "run_open": "Prediction recorded for the registered source hashes. Only `run` may execute this example, once. Arbitrary shell calls and edits remain locked. Then compare output and prediction and ask for `reflect: <what differed and why>`.",
-    "await_reconcile": "Waiting for the user's reflection (reflect:, agree:, disagree: or plain reasoning). Keep runs and edits locked. Ask one question. The reflection will be assessed before completion.",
-    "idle": "The gate state was unreadable and is locked for safety. `{cli} gate --mode M --topic T` starts a new gate; the user can also type /elenchus:off.",
+    "need_gate": "Choose explain, predict, propose, or decide with `gate --mode M --topic T --question Q`. Ask Q and end the turn. Predict uses prepare instead.",
+    "await_attempt": "Ask one opening question. End the turn; no tool call is needed to pin it.",
+    "attempted": "Ask one probing question and end the turn; Stop records the challenge. Use verdict after the required answered challenges.",
+    "challenging": "Wait for the user's answer. Do not answer your own challenge or register it again.",
+    "verdict_ok": "Ask for the user's conclusion and reasons, then wait. Plain reasoning is a reflection; reflect:, agree:, and disagree: also work.",
+    "review": "Assess the recorded reflection: `assess --result accept --mechanism M --transfer T --limit L --note N`, or `assess --result retry --question Q`. Judge reasoning, never length.",
+    "open": "Work normally until the next gate. You build; the user decides real trade-offs. Use `gate --mode decide --topic T --question Q` for those. Routine implementation choices are yours. Cards are optional, on request.",
+    "await_prediction": "Prepare one small example with `prepare --runtime python|node --file F --question Q` (repeat --source for imports). Ask for `predict: output and why`. Do not run or reveal output.",
+    "run_open": "Run the registered example once with `run`. Compare with the user's prediction, ask for reflect: what differed and why, and end the turn.",
+    "await_reconcile": "Ask for the user's reflection on the result. No more runs or edits. Assess only after they answer.",
+    "idle": "State is unreadable: tools stay locked. Start `gate --mode M --topic T`; only the user can disable Elenchus.",
 }
 
 
@@ -437,7 +438,19 @@ def cli_prefix(s):
 
 
 def fmt(key: str, s=None) -> str:
-    return NEXT[key].format(cli=cli_prefix(s) if s else CLI, maxw=MAX_WORDS, host=HOST, shell=SHELL_NAME)
+    if key == "attempted" and s:
+        answered = s["rounds"] >= MIN_ROUNDS.get(s["mode"], 1) and (s["attempt"] or {}).get("turn", 0) > s["challenge_turn"]
+        if s["mode"] == "decide" and answered:
+            return "One challenge answered. Accept sound reasoning with `assess --result accept --note N`; otherwise challenge again. No verdict or reflection step."
+        if answered:
+            return "Required challenges answered. If sound, run `verdict --note N`, then ask for the user's reflection and end the turn. Otherwise challenge again."
+        return "Ask one probing question and end the turn. Stop records the challenge; no CLI or status call is needed."
+    return NEXT[key]
+
+
+def step(s: dict) -> str:
+    return (f"ELENCHUS | mode={s['mode'] or 'unset'} | phase={s['phase']} | rounds={s['rounds']}/{MIN_ROUNDS.get(s['mode'], 0)}\n"
+            f"Next: {fmt(s['phase'], s)}")
 
 
 def briefing(s: dict, note: str = "") -> str:
@@ -453,7 +466,7 @@ def briefing(s: dict, note: str = "") -> str:
         lines.append(f"VIOLATION ON RECORD: last turn you broke a rule ({s['last_violation']}). The user was shown a warning. Do not repeat it.")
     if s.get("own_brief") and s["active"]:
         lines.append(s["own_brief"])
-    known = graph_find(s["topic"], 3) if s["phase"] not in ("open", "idle") and not s["recall"] else []
+    known = graph_find(s["topic"], 3) if s["phase"] in ("need_gate", "await_attempt", "await_prediction") and not s["recall"] else []
     if known:
         lines.append("ALREADY IN THE USER'S KNOWLEDGE GRAPH (do not re-teach; ask them to recall it, build on their words, "
                      "and name the related notes in `assess --links`): "
@@ -463,7 +476,7 @@ def briefing(s: dict, note: str = "") -> str:
         return "\n".join(lines)
     if s["focus_question"]:
         lines.append(f"Pinned question: {s['focus_question']}")
-    lines.append("A concise answer counts. Judge mechanism, transfer and limits, never length. Accept reasoned disagreement. Register questions with `question --text ...`; hints progress from a smaller question to one minimal hint.")
+    lines.append("A concise answer counts. Judge mechanism, transfer and limits, never length. Accept reasoned disagreement. The reply pins its question automatically; `question` is only needed for explicit smaller/hint support.")
     lines.append(f"Reminder: while locked, no target answers, no lists or headings, one question, under {MAX_WORDS} words. Example code is allowed during predict preparation. "
                  "A blocked tool means you owe the user a question, not a workaround.")
     return "\n".join(lines)
@@ -554,12 +567,7 @@ def on_text(s: dict, text: str) -> str:
         s["phase"] = "attempted"
         return "User attempt RECORDED. Evaluate its reasoning, regardless of length."
     if ph == "verdict_ok":
-        if meaningful(text):
-            s["phase"] = "attempted"
-            s["verdict"] = None
-            s["attempt"] = {"turn": s["turn"], "text": text[:1500]}
-            return "The user pushed back instead of agreeing. Verdict withdrawn. Answer the objection, then challenge or accept again."
-        return "Ask for the user's own conclusion; agreement is not required."
+        return on_agree(s, text)  # conclusions and reasoned objections both deserve assessment
     if ph in ("await_reconcile", "review"):
         return on_agree(s, text)
     return ""
@@ -643,7 +651,8 @@ def on_prompt(d: Path, s: dict, prompt: str) -> str:
     if s["phase"] == "open":
         return briefing(s)  # nothing to record, so open work never writes to the project
     s["turn"] += 1
-    am, pm = AGREE_RE.match(prompt) or REFLECT_RE.match(prompt), PREDICT_RE.match(prompt)
+    am = AGREE_RE.match(prompt) or REFLECT_RE.match(prompt)
+    pm = PREDICT_RE.match(prompt)
     dm = DELEGATE_RE.match(prompt)
     if dm and s["mode"] in ("decide", "propose") and not s["own"] and s["phase"] != "need_gate":
         # "you pick" is a legitimate answer; it is recorded as exactly that
@@ -716,10 +725,11 @@ def journal(path) -> list:
     return sorted(found.values(), key=lambda e: e["ts"])
 
 
-def read_turns(p: dict, d: Path, s: dict) -> None:
+def read_turns(p: dict, d: Path, s: dict) -> list:
     """Vibe has no prompt hook: record the user messages the journal holds and this
     session has not seen yet, exactly as a prompt hook would."""
-    for e in journal(p.get("transcript_path")):
+    turns = journal(p.get("transcript_path"))
+    for e in turns:
         text = e["text"].strip()
         if e["role"] != "user" or e["ts"] <= s["prompt_ts"]:
             continue
@@ -732,6 +742,7 @@ def read_turns(p: dict, d: Path, s: dict) -> None:
         if (d / "state.json").exists() and (note or was_active):
             s["notice"] = note
             save(d, s)  # a session without state stays off disk; its old messages replay as no-ops
+    return turns
 
 
 
@@ -918,6 +929,29 @@ def hook_pretool(p: dict) -> None:
          + (f" Run `{cli_prefix(s)} status` for the full briefing." if VIBE else ""))
 
 
+def hook_posttool(p: dict) -> None:
+    """Vibe 3.1 can append context to tool results, even without a prompt hook."""
+    if not VIBE:
+        return
+    d = state_dir(p.get("cwd"), p.get("session_id", ""))
+    s = load(d)
+    s["session_id"] = p.get("session_id", "")
+    tool, ti = p.get("tool_name", ""), p.get("tool_input") or {}
+    if not isinstance(ti, dict):
+        ti = {}
+    names = {tool, tool.rsplit(".", 1)[-1]}
+    # CLI transitions already return their new state. Never append a stale prompt notice.
+    if names & SHELL_TOOLS and is_cli(shell_command(ti), bool(names & {"PowerShell", "powershell"}), p.get("cwd", ""), s["session_id"]):
+        return
+    if s["briefed_turn"] == s["turn"] or (not s["notice"] and (not s["active"] or s["phase"] == "open")):
+        return
+    context = s["notice"] or briefing(s)
+    s.update(notice="", briefed_turn=s["turn"])
+    if (d / "state.json").exists():
+        save(d, s)
+    out({"hook_specific_output": {"additional_context": context}})
+
+
 # ---------------------------------------------------------------- stop hook
 
 def last_text(path):
@@ -999,12 +1033,12 @@ def teeth(s: dict, text):
     if ph in ("await_attempt", "challenging") and not asks(text):
         return f"{TAG} no ask for the user. Add one closing sentence they must answer in their own words. {NOREPEAT}"
     if ph == "attempted":
-        return (f"{TAG} register your move first: `{CLI} challenge --text ...` or `{CLI} verdict --note ...` (decide gate: `assess`), "
+        return (f"{TAG} ask one short probing question, or record a verdict (decide gate: assess), "
                 f"then end the turn. {NOREPEAT}")
     if ph == "review":
         return f"{TAG} assess the reflection before ending; accept sound reasoning or register a retry question."
-    if ph == "verdict_ok" and not any(x in low for x in ("agree:", "reflect:", "disagree:")):
-        return f"{TAG} ask for `reflect: <your conclusion and reasons>`. Disagreement is welcome. {NOREPEAT}"
+    if ph == "verdict_ok" and not asks(text) and not any(x in low for x in ("agree:", "reflect:", "disagree:")):
+        return f"{TAG} ask for the user's conclusion and reasons. Disagreement is welcome. {NOREPEAT}"
     if ph == "await_prediction" and "predict:" not in low:
         return f"{TAG} ask for `predict: <what happens when this runs>` before anything runs, without saying the output. {NOREPEAT}"
     if ph == "await_reconcile" and not any(x in low for x in ("agree:", "reflect:", "disagree:")) and not asks(text):
@@ -1026,13 +1060,16 @@ def hook_stop(p: dict) -> None:
     s = load(d)
     if VIBE:
         s["session_id"] = p.get("session_id", "")
-        read_turns(p, d, s)  # covers turns without a tool call
+        turns = read_turns(p, d, s)  # covers turns without a tool call
     if not s["active"]:
         return
     text = p.get("last_assistant_message")
     if not isinstance(text, str) or not text.strip():
-        text = (next((e["text"] for e in reversed(journal(p.get("transcript_path"))) if e["role"] == "assistant"), None)
+        text = (next((e["text"] for e in reversed(turns) if e["role"] == "assistant"), None)
                 if VIBE else last_text(p.get("transcript_path")))
+    if (s["phase"] == "attempted" and s["mode"] in MIN_ROUNDS and s["housekeeping_turn"] != s["turn"]
+            and text and asks(text) and not leaks(text)):
+        register_challenge(s, text)  # record the actual closing question without a model/tool round trip
     reason = teeth(s, text)
     warn = None
     if reason:
@@ -1049,6 +1086,7 @@ def hook_stop(p: dict) -> None:
         # Keep the last valid ask beside the input, even without explicit question CLI.
         # Prediction replies may include the code being shown. Only pin the ask.
         s["focus_question"] = re.sub(r"```.*?```", "", text, flags=re.S).strip()[-1500:]
+        s["notice"] = ""  # the reply has advanced or pinned this state; discard the old prompt snapshot
     elif warn is None:
         return
     save(d, s)
@@ -1072,11 +1110,14 @@ def cmd_gate(d, s, a):
     need_active(s)
     if s["phase"] not in ("need_gate", "idle", "open"):
         die(f"A gate is already in progress (mode={s['mode']}, phase={s['phase']}). Finish it first.")
+    if a.question and (a.mode == "predict" or words(a.question) > MAX_WORDS or not asks(a.question) or leaks(a.question)):
+        die("Use one short opening question; predict registers its question with prepare.")
     reset_gate(s)
     s.update(mode=a.mode, topic=a.topic, gate_turn=s["turn"])
     s["phase"] = "await_prediction" if a.mode == "predict" else "await_attempt"
+    s["focus_question"] = a.question
     save(d, s)
-    print("Gate ready. Register one opening question.")
+    print("Gate ready. Ask the opening question and end the turn; it is pinned automatically.")
 
 
 def cmd_question(d, s, a):
@@ -1095,20 +1136,24 @@ def cmd_question(d, s, a):
     print("Question pinned.")
 
 
+def register_challenge(s, text):
+    if s["mode"] == "decide" and not s["agreement"]:
+        s["agreement"] = {"turn": s["turn"], "text": s["attempt"]["text"]}  # the choice as first stated
+    s["rounds"] += 1
+    s["challenge_turn"] = s["turn"]
+    s["challenges"].append(text[:500])
+    s["focus_question"] = text[:1500]
+    s["help_level"] = 0
+    s["phase"] = "challenging"
+
+
 def cmd_challenge(d, s, a):
     need_active(s)
     if s["mode"] not in ("explain", "propose", "decide"):
         die("challenge applies to explain, propose and decide gates only.")
     if s["phase"] != "attempted":
         die(f"Cannot challenge in phase {s['phase']}. The user has to make an attempt first.")
-    if s["mode"] == "decide" and not s["agreement"]:
-        s["agreement"] = {"turn": s["turn"], "text": s["attempt"]["text"]}  # the choice as first stated
-    s["rounds"] += 1
-    s["challenge_turn"] = s["turn"]
-    s["challenges"].append(a.text[:500])
-    s["focus_question"] = a.text[:1500]
-    s["help_level"] = 0
-    s["phase"] = "challenging"
+    register_challenge(s, a.text)
     save(d, s)
     print(f"Challenge {s['rounds']} registered. Ask it now, briefly, and end the turn.")
 
@@ -1128,7 +1173,7 @@ def cmd_verdict(d, s, a):
     s["phase"] = "verdict_ok"
     s["focus_question"] = "What is your conclusion, and what reasons support it? Disagreement is welcome."
     save(d, s)
-    print("Verdict recorded. Ask for reflect: their conclusion and reasons, including disagreement.")
+    print("Verdict recorded. Ask for their conclusion and reasons, including disagreement. Plain reasoning or reflect: both work.")
 
 
 def cmd_assess(d, s, a):
@@ -1261,7 +1306,7 @@ def cmd_run(d, s, a):
                       "exit_code": exit_code}
     s["run_result"] = output
     save(d, s)
-    print(json.dumps({"prediction": s["attempt"]["text"], "actual": output}, ensure_ascii=False))
+    print(json.dumps({"prediction": s["attempt"]["text"], "actual": output, "next": fmt(s["phase"], s)}, ensure_ascii=False))
 
 
 def slug(t: str) -> str:
@@ -1412,14 +1457,19 @@ def cmd_paper(d, s, a):
 
 
 def cmd_status(d, s, a):
+    if a.brief and s["active"]:
+        print(s["notice"] or briefing(s))
+        if s["notice"]:
+            s["notice"] = ""
+            save(d, s)
+        return
     if not s["active"]:
         print(s["notice"] or "Elenchus is inactive. The user starts it with /elenchus:learn.")
         return
+    print(s["notice"] or briefing(s))
     if s["notice"]:  # Vibe: what the user's last message produced, delivered once
-        print(s["notice"] + "\n")
         s["notice"] = ""
         save(d, s)
-    print(briefing(s))
     print(f"Completed gates: {len(s['completed'])} | rule violations on record: {s['violations']}")
     print("Earlier topics (use only a genuinely relevant connection):")
     for c in s["completed"][-10:]:
@@ -1439,6 +1489,7 @@ def cli_main(argv):
     g = sub.add_parser("gate")
     g.add_argument("--mode", required=True, choices=MODES)
     g.add_argument("--topic", required=True)
+    g.add_argument("--question", default="")
     c = sub.add_parser("challenge")
     c.add_argument("--text", required=True)
     v = sub.add_parser("verdict")
@@ -1457,7 +1508,7 @@ def cli_main(argv):
     prepare.add_argument("--source", action="append", default=[])
     prepare.add_argument("--question", required=True)
     sub.add_parser("run")
-    sub.add_parser("status")
+    sub.add_parser("status").add_argument("--brief", action="store_true")
     k = sub.add_parser("cards")
     ks = k.add_subparsers(dest="sub", required=True)
     ad = ks.add_parser("add")
@@ -1504,15 +1555,26 @@ def cli_main(argv):
                    "assess": cmd_assess, "prepare": cmd_prepare, "run": cmd_run,
                    "question": cmd_question, "status": cmd_status, "cards": cmd_cards,
                    "paper": cmd_paper, "graph": cmd_graph, "choice": cmd_choice}[a.cmd]
-        if a.cmd == "cards" and (a.sub == "add" or (project_dir(d) / "anki").is_dir()):
-            with locked(project_dir(d) / "anki"):
+        moving = a.cmd in ("gate", "question", "challenge", "verdict", "assess", "prepare", "run", "choice")
+        if moving:
+            s["notice"] = ""
+        try:
+            if a.cmd == "cards" and (a.sub == "add" or (project_dir(d) / "anki").is_dir()):
+                with locked(project_dir(d) / "anki"):
+                    handler(d, s, a)
+            else:
                 handler(d, s, a)
-        else:
-            handler(d, s, a)
+        except SystemExit as exc:
+            if exc.code and s["active"]:
+                print(step(s))  # recover in this result instead of another status/model round trip
+            raise
+        if moving and a.cmd != "run":
+            print(step(s))
+
 
 
 HOOKS = {"hook-session": hook_session, "hook-prompt": hook_prompt,
-         "hook-pretool": hook_pretool, "hook-stop": hook_stop}
+         "hook-pretool": hook_pretool, "hook-stop": hook_stop, "hook-posttool": hook_posttool}
 
 
 def main() -> None:

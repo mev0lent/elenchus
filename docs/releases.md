@@ -35,8 +35,8 @@ claude plugin validate . || exit 1
 claude plugin test plugins/elenchus-ui || exit 1
 
 # Example, after the matching manifests and changelog are committed and CI passes:
-git tag -a v0.10.0 -m 'Elenchus 0.10.0'
-git push origin v0.10.0
+git tag -a v0.11.0 -m 'Elenchus 0.11.0'
+git push origin v0.11.0
 ```
 
 Codex caches installed plugins. Refresh the installed copy after a release using

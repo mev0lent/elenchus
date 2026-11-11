@@ -22,6 +22,22 @@ A passed gate opens the work and it stays open: no lock and no word cap until th
 
 If you really have no opinion, type `delegate: <remark>`. The agent then decides, and the graph records that this one was left to it, alongside what the agent chose and why. `elenchus.py graph delegated` lists what you do not own.
 
+## Fast turns during development
+
+Use a decide gate for a real development trade-off; keep explain/propose for deliberate
+learning. Opening questions and ordinary challenges are recorded automatically when
+the agent ends its turn, with no bookkeeping tool call. Assessments still check your
+reasoning before work opens.
+
+After a verdict, reply with your conclusion and reasons in plain words. You do not
+need to repeat it with a `reflect:` prefix; explicit prefixes still work. Cards wait
+until you request them. Vibe bootstraps its session once, then receives state through
+CLI and tool results instead of fetching status on every turn.
+
+Start a fresh host session after updating, especially Vibe: its plugin code is pinned
+per session. These changes remove Elenchus round trips; model/server latency can
+still dominate a response. See [the measured comparison](docs/performance.md).
+
 ## Your knowledge graph
 
 Every gate you pass becomes a note in one folder shared by all your projects: `~/.config/elenchus/graph` (set `ELENCHUS_GRAPH` to put it elsewhere, for example inside an Obsidian vault). One Markdown note per topic, with your own words, how it works, where else it applies, its limit and what you missed. `[[links]]` connect it to the project and to related notes, so Obsidian, Logseq or Foam show it as a graph without any conversion.
