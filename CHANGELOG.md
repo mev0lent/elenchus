@@ -6,6 +6,8 @@
   questions and records ordinary challenges. Challenge counts and user answers remain
   required; explicit `challenge` calls still work.
 - Add `gate --question` to start a decision and pin its opening question in one call.
+- Reject premature verdict/assessment calls before requesting tool permission, using
+  the same phase validation as the CLI.
 - Return the current phase and next action with transitions and CLI errors, avoiding
   status/retry loops. Prediction runs retain JSON output with an added `next` field.
 - Treat plain reasoning and objections after verdict as reflections for assessment;

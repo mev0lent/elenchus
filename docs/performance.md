@@ -51,7 +51,7 @@ promises.
 
 | Payload | 0.10.0 | 0.11.0 | Reduction |
 | --- | ---: | ---: | ---: |
-| Shared Socratic skill | 12,065 | 7,586 | 37% |
+| Shared Socratic skill | 12,065 | 7,925 | 34% |
 | Opening rules plus briefing | 2,576 | 1,963 | 24% |
 | Attempt briefing | 1,555 | 806 | 48% |
 
@@ -59,6 +59,27 @@ The regression suites replay the no-CLI challenge path in each host dialect, enf
 prompt-size budgets, test failed-command recovery and natural reflections, and check
 Vibe context delivery without stale or repeated notices. They also retain the earlier
 lock, evidence, isolation, and prediction tests.
+
+## Live smoke checks
+
+A fresh Vibe 3.1 session using 0.11.0 asked its opening question in 9.91 seconds.
+It read the skill once, received the phase through post_tool context, and asked the
+question without any status or question-registration CLI call. The question was
+persisted and no hook violation was recorded. This is a fresh, shorter session, not
+a controlled speed comparison against the older long-session trace.
+
+Its follow-up exposed a premature verdict attempt, which motivated validating
+verdict/assessment phases in pre_tool before a permission prompt. The same validation
+functions now guard both the hook and CLI, with regression coverage in every dialect.
+
+A final fresh-session smoke check with that fix produced the opening in 11.45 seconds
+and its next probe in 9.79 seconds. The probe used one model completion and **zero tool
+calls**; Stop recorded round 1, kept the gate locked, and reported no violations.
+These are two sample turns with the existing model settings, not a latency bound.
+
+A live Claude test reached its account usage limit before generation, so it provides
+no model latency measurement. Codex's host-dialect regression tests pass; an interactive
+model timing test still requires the user's hook trust.
 
 ## Practical limits
 

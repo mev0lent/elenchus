@@ -18,6 +18,8 @@ Load this skill once, then follow the current ELENCHUS block and each CLI result
 
 The Stop hook pins a valid closing question automatically. After a user attempt, it also records that question as the challenge: just ask and end the turn, with no CLI call. An explicit `challenge --text Q` still works, but is unnecessary. `prepare --question Q` pins its question too. Never follow either with `question`. Use `question --support smaller|hint --text Q` only for the help ladder, or to change the pinned question on request.
 
+An opening question is not a challenge round. After the user's first answer, rounds is still zero: ask the probe directly, even if their answer was correct. Never call verdict or assess until the required probe has been asked and answered. A denied command returns the next action; follow it without another status or permission attempt.
+
 Claude Code and Codex receive their phase through hooks. On Mistral Vibe 3.1, bootstrap once with `python3 <plugin>/scripts/elenchus.py status --brief` if no session prefix is known (`<plugin>` is two directories above this file). After that, CLI results and the first ordinary tool result carry the phase. A user's answer advances the waiting phase before your next tool runs. Use the known phase and their reply to choose your move; the engine validates it. Use status only to recover missing context or when the user requests it. Never guess a session ID or adopt another session's ID.
 
 ## Modes and moves

@@ -239,3 +239,13 @@ Windows is outside the requested validation scope.
 Validation: all six engine suites and both Python UI checks passed; all nine Claude
 UI/mod tests and marketplace validation passed. The installed Vibe 3.1 HookConfig
 also accepts all three hook entries. No live model latency bound is claimed.
+
+Live follow-up: a fresh Vibe opening completed in 9.91 seconds with one skill read and
+no bookkeeping CLI calls. The next turn caught a premature verdict permission request;
+shared phase validation now rejects impossible verdict/assessment calls in pre_tool,
+before approval. The live Claude request hit its account usage limit before generation.
+See performance.md for the distinction between protocol checks and model timings.
+
+Final Vibe smoke check after the guard fix: opening 11.45 seconds, next probe 9.79
+seconds. The probe used one model completion, zero tools, and automatically recorded
+round 1 with tools still locked and no violations. These are samples, not time bounds.

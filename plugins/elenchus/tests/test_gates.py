@@ -136,6 +136,23 @@ class Gates(unittest.TestCase):
         self.assertIn("Next:", result.stdout)
         self.assertNotIn("Earlier topics", result.stdout)
 
+    def test_impossible_acceptance_is_rejected_before_permission(self):
+        self.prompt("/elenchus:learn explain TLS")
+        self.prompt("The issuer signs the key.")
+        prefix = f'"{sys.executable}" "{SCRIPT}" --session "one"'
+        for command in ('verdict --note "Too soon"', 'assess --result accept --note "Too soon"'):
+            result = self.hook("pretool", tool_name="Bash", tool_input={"command": prefix + " " + command})
+            self.assertIn('"deny"', result.stdout)
+            self.assertIn("phase=attempted", result.stdout)
+            self.assertIn("Next:", result.stdout)
+        self.assertEqual((self.state()["phase"], self.state()["rounds"]), ("attempted", 0))
+        self.hook("stop", last_assistant_message="What breaks if the issuer is compromised?")
+        self.prompt("A forged identity can pass verification.")
+        self.assertFalse(self.denied("Bash", command=prefix + ' verdict --note "Sound"'))
+        self.assertEqual(self.cli("verdict", "--note", "Sound").returncode, 0)
+        self.prompt("Trust depends on the issuer's key remaining private.")
+        self.assertFalse(self.denied("Bash", command=prefix + ' assess --result accept --note "Sound"'))
+
     def test_ordinary_prompt_context_stays_within_the_fast_path_budget(self):
         def context(result):
             return json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]

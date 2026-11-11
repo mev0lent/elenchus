@@ -901,6 +901,10 @@ def hook_pretool(p: dict) -> None:
         ti = {}
     names = {tool, tool.rsplit(".", 1)[-1]}  # Vibe qualifies its tools: file_system.bash
     sub = is_cli(shell_command(ti), bool(names & {"PowerShell", "powershell"}), cwd, s["session_id"]) if names & SHELL_TOOLS else ""
+    if s["active"] and sub in ("verdict", "assess"):
+        problem = verdict_problem(s) if sub == "verdict" else assessment_problem(s)
+        if problem:
+            return deny(f"{problem}\n{step(s)}")  # reject impossible moves before asking for permission
     if sub and sub != "run" and HOST == "Claude":
         # The engine's own bookkeeping needs no permission prompt. `run` executes code and keeps it.
         # shortcut: Claude Code only; Codex and Vibe cannot be told to approve from a hook, revisit when they can.
@@ -1158,17 +1162,24 @@ def cmd_challenge(d, s, a):
     print(f"Challenge {s['rounds']} registered. Ask it now, briefly, and end the turn.")
 
 
-def cmd_verdict(d, s, a):
-    need_active(s)
+def verdict_problem(s):
     if s["mode"] not in ("explain", "propose"):
-        die("verdict applies to explain and propose gates only. A decide gate ends with assess.")
+        return "verdict applies to explain and propose gates only. A decide gate ends with assess."
     if s["phase"] != "attempted":
-        die(f"Cannot accept in phase {s['phase']}. The user must have answered your latest challenge first.")
+        return f"Cannot accept in phase {s['phase']}. The user must have answered your latest challenge first."
     need = MIN_ROUNDS[s["mode"]]
     if s["rounds"] < need:
-        die(f"{s['rounds']}/{need} challenge rounds done. Challenge again; the user must answer each one.")
+        return f"{s['rounds']}/{need} challenge rounds done. Ask a probe, then wait for the user's answer."
     if s["attempt"]["turn"] <= s["challenge_turn"]:
-        die("The user has not answered your latest challenge yet.")
+        return "The user has not answered your latest challenge yet."
+    return ""
+
+
+def cmd_verdict(d, s, a):
+    need_active(s)
+    problem = verdict_problem(s)
+    if problem:
+        die(problem)
     s["verdict"] = {"turn": s["turn"], "note": a.note[:500], "missed": a.missed[:500]}
     s["phase"] = "verdict_ok"
     s["focus_question"] = "What is your conclusion, and what reasons support it? Disagreement is welcome."
@@ -1176,18 +1187,26 @@ def cmd_verdict(d, s, a):
     print("Verdict recorded. Ask for their conclusion and reasons, including disagreement. Plain reasoning or reflect: both work.")
 
 
+def assessment_problem(s):
+    if s["mode"] == "decide":
+        if s["phase"] != "attempted" or s["rounds"] < 1 or s["attempt"]["turn"] <= s["challenge_turn"]:
+            return "A decide gate needs the user's choice, one challenge and their answer before it can be accepted."
+    elif s["phase"] != "review" or not s["agreement"]:
+        return "Only a user reflection can be assessed."
+    return ""
+
+
 def cmd_assess(d, s, a):
     need_active(s)
+    problem = assessment_problem(s)
+    if problem:
+        die(problem)
     decide = s["mode"] == "decide"
     if decide:
-        if s["phase"] != "attempted" or s["rounds"] < 1 or s["attempt"]["turn"] <= s["challenge_turn"]:
-            die("A decide gate needs the user's choice, one challenge and their answer before it can be accepted.")
         if a.result == "retry":
             die("In a decide gate, challenge again instead of retrying.")
         first = (s["agreement"] or {}).get("text", "")
         s["agreement"] = {"turn": s["turn"], "text": f"{first} | Challenged, I answered: {s['attempt']['text']}"}
-    elif s["phase"] != "review" or not s["agreement"]:
-        die("Only a user reflection can be assessed.")
     if a.result == "retry":
         if not a.question or words(a.question) > MAX_WORDS or not asks(a.question) or leaks(a.question):
             die("A retry needs one short question.")
