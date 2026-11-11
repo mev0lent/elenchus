@@ -9,7 +9,7 @@
     {
       "name": "elenchus",
       "source": "./plugins/elenchus",
-      "description": "Socratic gates and owner's papers: think first, then own every decision of a project. Claude Code, Cowork and Codex."
+      "description": "Socratic gates and owner's papers: think first, then own every decision of a project. Claude Code, Cowork, Codex and Mistral Vibe."
     },
     {
       "name": "elenchus-ui",

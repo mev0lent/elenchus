@@ -1,0 +1,19 @@
+# Elenchus gate hooks for Mistral Vibe. Vibe has no prompt hook, so the first tool
+# call of a turn (pre_tool) and the end of the turn (post_agent) read the user's typed
+# words from the session journal. strict = true keeps a live gate closed when the
+# engine cannot run; run.sh exits 0 in that case when no gate is active, so a broken
+# install never blocks ordinary work.
+
+[[hooks]]
+name = "gate-tools"
+type = "pre_tool"
+match = "*"
+strict = true
+command = "sh scripts/run.sh hook-pretool"
+timeout = 15.0
+
+[[hooks]]
+name = "review-reply"
+type = "post_agent"
+command = "sh scripts/run.sh hook-stop"
+timeout = 15.0

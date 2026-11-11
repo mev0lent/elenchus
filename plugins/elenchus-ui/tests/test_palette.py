@@ -60,8 +60,6 @@ check("UI hooks.json names only the UI module", ui_hooks == {"modules": ["./regi
 core_hooks = json.loads((CORE / "hooks" / "hooks.json").read_text(encoding="utf-8"))
 check("core hooks.json has no UI module", "modules" not in core_hooks)
 check("core hooks.json carries the command hooks", set(core_hooks.get("hooks", {})) == {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"})
-check("vibe card css matches the core card css",
-      (PLUGIN.parent / "elenchus-vibe" / "anki" / "elenchus-card.css").read_bytes() == (CORE / "anki" / "elenchus-card.css").read_bytes())
 check("module files exist", (PLUGIN / "hooks" / "register.tsx").exists() and (PLUGIN / "hooks" / "palette.ts").exists())
 check("palette.ts has no em-dashes", chr(0x2014) not in ts)
 

@@ -1,0 +1,29 @@
+name: Checks
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install the paper compiler
+        run: python3 -m pip install typst
+      - name: Hook, engine, packaging, and paper tests
+        run: |
+          for t in test_gates test_vibe test_codex test_crossos test_launcher test_paper; do
+            python3 plugins/elenchus/tests/$t.py || exit 1
+          done
+      - name: UI palette and themes
+        run: |
+          python3 plugins/elenchus-ui/tests/test_palette.py
+          python3 plugins/elenchus-ui/tests/test_theme.py

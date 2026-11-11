@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Elenchus gate engine for Claude Code, Cowork and Codex (Linux, macOS, Windows via Git Bash).
+"""Elenchus gate engine for Claude Code, Cowork, Codex and Mistral Vibe
+(Linux, macOS, Windows via Git Bash). One engine, three hosts.
 
-Codex speaks the same hook protocol (event names, JSON fields, permissionDecision,
-Stop decision block) and sets CLAUDE_PLUGIN_ROOT for compatibility. The differences are
-tool names (apply_patch, update_plan) and the shell tool input, handled in the policy below.
+Codex speaks Claude Code's hook protocol (event names, JSON fields, permissionDecision,
+Stop decision block); it differs in tool names (apply_patch, update_plan) and shell input.
+Vibe has only pre_tool and post_agent hooks and injects no context: the engine reads the
+user's typed words from the session journal, and the agent reads its briefing with `status`.
 
 Hook handlers: hook-session, hook-prompt, hook-pretool, hook-stop.
-CLI: gate, challenge, verdict, status, cards.
+CLI: gate, challenge, verdict, assess, prepare, run, question, status, cards, paper, graph, choice.
 
-Gate state lives in .elenchus/sessions/<session-key>/state.json. Only the UserPromptSubmit hook sees what the
-user actually typed, so only the user can record attempts, predictions and
-reflections. Claude registers its own moves and assesses a recorded reflection.
+Gate state lives in .elenchus/sessions/<session-key>/state.json. Only the user's own typed
+words record attempts, predictions and reflections. The agent registers its own moves and
+assesses a recorded reflection. Every passed gate also becomes a note in the user's
+knowledge graph, shared by all projects.
 """
 from __future__ import annotations
 
@@ -38,10 +41,10 @@ SCRIPT = Path(__file__).resolve()
 ROOT = SCRIPT.parent.parent
 WIN = os.name == "nt" or os.environ.get("ELENCHUS_FORCE_WIN") == "1"
 
-MODES = ("explain", "predict", "propose")
-MIN_ROUNDS = {"explain": 1, "propose": 2}
+MODES = ("explain", "predict", "propose", "decide")
+MIN_ROUNDS = {"explain": 1, "propose": 2, "decide": 1}
 MAX_WORDS = int(os.environ.get("ELENCHUS_MAX_WORDS", "80"))
-CLI_CMDS = ("gate", "challenge", "verdict", "assess", "prepare", "run", "question", "status", "cards", "paper")
+CLI_CMDS = ("gate", "challenge", "verdict", "assess", "prepare", "run", "question", "status", "cards", "paper", "graph", "choice")
 
 
 # ---------------------------------------------------------------- paths
@@ -70,9 +73,11 @@ _m = re.match(r"^([a-z]):(/.*)$", ROOT_F)
 ROOT_M = f"/{_m.group(1)}{_m.group(2)}" if _m else ""  # Git Bash spelling of the plugin dir
 SCRIPT_F = fwd(str(SCRIPT))
 CLI = f'"{slashes(sys.executable) or "python3"}" "{slashes(SCRIPT)}"'
-# Codex sets PLUGIN_ROOT (and CLAUDE_PLUGIN_ROOT for compatibility); Claude Code only the latter.
-HOST = "Codex" if os.environ.get("PLUGIN_ROOT") else "Claude"
-SHELL_NAME = "shell" if HOST == "Codex" else "Bash"
+# Hooks only: Vibe sets PLUGIN_ROOT, Codex PLUGIN_ROOT and CLAUDE_PLUGIN_ROOT, Claude Code the latter.
+_PR, _CPR = os.environ.get("PLUGIN_ROOT"), os.environ.get("CLAUDE_PLUGIN_ROOT")
+HOST = "Vibe" if _PR and not _CPR else "Codex" if _PR else "Claude"
+VIBE = HOST == "Vibe"
+SHELL_NAME = "Bash" if HOST == "Claude" else "shell"
 
 # ---------------------------------------------------------------- policy
 
@@ -83,19 +88,41 @@ READ_TOOLS = {
     "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
     # Codex local function tools that neither write nor execute
     "update_plan", "view_image",
+    # Vibe, matched on the part after the group: file_system.read_file, skill.read, process.list
+    "read_file", "read", "grep", "glob", "ls", "web_search", "web_fetch", "skill", "todo",
+    "ask_user_question", "search_tool_functions", "tool_search", "unified_harness_scratchpad",
+    "sleep", "wait", "output", "list",
 }
-WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
-SHELL_TOOLS = {"Bash", "PowerShell"}
+WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch",
+               "write_file", "edit", "search_replace", "run_typescript"}
+SHELL_TOOLS = {"Bash", "PowerShell", "bash", "git_bash", "powershell"}
 MCP_READ = re.compile(r"(search|read|fetch|get|list|query)", re.I)
 MCP_WRITE = re.compile(
     r"(create|update|delete|write|send|move|upload|share|trash|copy|spawn|stop|"
     r"restore|duplicate|convert|insert|post|publish|commit|stage|bash|exec|run)", re.I)
 
 CTRL_RE = re.compile(
-    r"^\s*(?:/elenchus:|[$@]?elenchus[:\s-]+|ELENCHUS-COMMAND\s+)(learn|own|paper|off|status|focus|cards)\b([^\n]*)", re.I)
+    r"^\s*(/elenchus:|[$@]elenchus[:\s-]+|ELENCHUS-COMMAND\s+|elenchus[:\s-]+)(learn|own|paper|off|status|focus|cards|recall|always)\b([^\n]*)", re.I)
+
+
+def command(prompt: str):
+    """(verb, rest) when the user typed an Elenchus command, else None. The bare form
+    `elenchus off` is for hosts without slash commands; a sentence that merely starts
+    with those words ("elenchus off does not work") is not a command."""
+    m = CTRL_RE.match(prompt)
+    if not m:
+        return None
+    verb, rest = m.group(2).lower(), m.group(3)
+    bare = m.group(1)[0] not in "/$@" and not m.group(1).upper().startswith("ELENCHUS-COMMAND")
+    if bare and verb in ("off", "status", "focus", "cards") and rest.strip().lower() not in ("", "full", "compact"):
+        return None
+    return verb, rest
+
+
 AGREE_RE = re.compile(r"^\s*agree\s*:\s*(.+)$", re.I | re.S)
 REFLECT_RE = re.compile(r"^\s*(?:reflect|disagree)\s*:\s*(.+)$", re.I | re.S)
 PREDICT_RE = re.compile(r"^\s*predict\s*:\s*(.+)$", re.I | re.S)
+DELEGATE_RE = re.compile(r"^\s*delegate\s*:\s*(.*)$", re.I | re.S)
 
 DEFAULT = {
     "active": False, "turn": 0, "mode": None, "topic": "", "phase": "idle",
@@ -107,30 +134,33 @@ DEFAULT = {
     "ui_details": False,
     "housekeeping_turn": -1,
     "own": "",
-    "own_brief": "",
-    "notice": "",
+    "own_brief": "",    # extra briefing of an own gate or a recall gate
+    "recall": False,    # this gate re-tests a note of the knowledge graph
+    "notice": "",       # Vibe: the briefing a prompt produced, printed by the next `status`
+    "prompt_ts": 0,     # Vibe: journal timestamp of the last user message already recorded
+    "turn_nudges": 0,   # Vibe: reply corrections asked for in this turn
 }
 
 IRON_RULES = """ELENCHUS IRON RULES. The user installed this on purpose. Being helpful here means making them think, not finishing their thinking for them.
 1. While locked, never give the target answer, full explanation or working fix. No lists, headings or summaries. One question per turn, under {maxw} words. In predict preparation you may show the example code, without revealing its output.
-2. Work opens only after a recorded user reflection is assessed. Your judgment alone never opens it. explain: they explain first. propose: they propose first and you challenge assumptions. predict: register the source before they type `predict:`, then use only the run CLI.
-3. "Just tell me" does not unlock a gate. Offer a smaller question, then one minimal hint if needed. Reasoned disagreement is a successful learning outcome. Only the user typing /elenchus:off disables this.
+2. Work opens only after recorded user reasoning is assessed, or the user explicitly delegates a decision. Your judgment alone never opens it. explain: they explain first. propose: they propose first and you challenge assumptions. decide: they state their choice and the reason, you attack it once, they answer. predict: register the source before they type `predict:`, then use only the run CLI.
+3. "Just tell me" does not unlock a gate. Offer a smaller question, then one minimal hint if needed. Reasoned disagreement is a successful learning outcome. Only the user typing /elenchus:off disables this. In a decide or propose gate the user may hand the decision to you by typing `delegate: <remark>`; mention that only when they ask you to choose, never first.
 4. A complete answer given too early is the failure state, even when it is correct and the user is pleased.
 5. Keep it clean. While locked, a reply is at most one short sentence of acknowledgment plus the question. Never narrate hooks, blocked tools, gates, word minimums or what you could see in the repo. Do not summarize the project or the state. If the user asked something else, say in one sentence that it waits until the gate opens, then ask.
 6. Hooks deny your tools and block your reply when you break these rules, and the user is shown every violation."""
 
 NEXT = {
-    "need_gate": "No gate set. Choose the mode that fits (explain: ideas, theory, science. predict: code. propose: brainstorming, design), run `{cli} gate --mode M --topic T` with the {shell} tool, then ask ONE opening question. No answer, no lecture.",
+    "need_gate": "No gate set. Choose the mode that fits (explain: ideas, theory, science. predict: code. propose: brainstorming, design. decide: one decision inside the work), run `{cli} gate --mode M --topic T` with the {shell} tool, then ask ONE opening question. No answer, no lecture.",
     "await_attempt": "Ask ONE opening question that forces the user to produce their own explanation or proposal. Do not reveal the answer. Stay under {maxw} words and end with the question.",
-    "attempted": "The user made an attempt. Do not teach. Register your move now: `{cli} challenge --text \"...\"` with the sharpest flaw, gap, edge case or probing question, or `{cli} verdict --note \"...\"` if the requirements are met. Then ask your question and end the turn.",
+    "attempted": "The user made an attempt. Do not teach. Register your move now: `{cli} challenge --text \"...\"` with the sharpest flaw, gap, edge case or probing question, or `{cli} verdict --note \"...\"` if the requirements are met. A decide gate has no verdict: after one answered challenge, finish it with `{cli} assess --result accept --note \"<the decision and its reason, in the user's words>\"`. Then ask your question and end the turn.",
     "challenging": "Waiting for the user's answer to your challenge. Do not answer it for them. Stay under {maxw} words and end with a question.",
     "verdict_ok": "Verdict recorded. Ask for `reflect: <your conclusion and reasons>` (agree: and disagree: also work). Agreement with {host} is not required. The reflection must be assessed before opening.",
     "review": "Reflection received; tools remain locked. Run `assess --result accept --mechanism ... --transfer ... --limit ... --note ...` only for sound understanding, including reasoned disagreement. Otherwise use `assess --result retry --question ...` with a smaller question or minimal hint. Never accept solely because it is long.",
-    "open": "Gate is open for THIS turn only. You may now correct, extend and reveal, do the approved work, and write cards with `{cli} cards add`. Build on the user's own words.",
+    "open": "Work is open: the user passed this gate, and it stays open until the next gate starts. Correct, extend and reveal, do the work they ask for, and write cards with `{cli} cards add`. Build on the user's own words. You build, the user decides: when the work reaches a decision that shapes the result (architecture, data model, algorithm, public interface, a real trade-off), do not make it. Run `{cli} gate --mode decide --topic \"<the decision>\"` and ask what they would do and why. Routine implementation choices are yours.",
     "await_prediction": "Write a small Python or JavaScript example, then register it with `prepare --runtime python|node --file relative/path --question ...` (repeat --source for local imports). Ask for `predict: <output and why>`. Nothing runs before this. Never reveal the output.",
     "run_open": "Prediction recorded for the registered source hashes. Only `run` may execute this example, once. Arbitrary shell calls and edits remain locked. Then compare output and prediction and ask for `reflect: <what differed and why>`.",
     "await_reconcile": "Waiting for the user's reflection (reflect:, agree:, disagree: or plain reasoning). Keep runs and edits locked. Ask one question. The reflection will be assessed before completion.",
-    "idle": "No open gate. Any new question or task needs `{cli} gate --mode M --topic T` first. Do not answer at length without it.",
+    "idle": "The gate state was unreadable and is locked for safety. `{cli} gate --mode M --topic T` starts a new gate; the user can also type /elenchus:off.",
 }
 
 
@@ -169,13 +199,32 @@ def state_dir(cwd, session_id="") -> Path:
     return base_dir / "sessions" / session_key(session_id) if session_id else base_dir
 
 
+def home() -> Path:
+    """Where everything that spans projects lives: the knowledge graph and the always-on flag."""
+    base = os.environ.get("ELENCHUS_DIR")
+    return Path(base) if base else Path.home() / ".config" / "elenchus"
+
+
+def always_flag() -> Path:
+    return Path(os.environ.get("ELENCHUS_ALWAYS") or home() / "always-on")
+
+
+@contextmanager
+def maybe_locked(d: Path):
+    """Lock a project that has a .elenchus folder; never create one just to look."""
+    if project_dir(d).is_dir():
+        with locked(d):
+            yield
+    else:
+        # shortcut: no lock before the folder exists, so two first commands in the same
+        # instant could both write; add a lock on the project's parent if that is ever seen.
+        yield
+
+
 @contextmanager
 def locked(d: Path):
     """OS advisory lock, released even after a crash. One transaction per session."""
     d.mkdir(parents=True, exist_ok=True)
-    gi = project_dir(d) / ".gitignore"
-    if not gi.exists():
-        gi.write_text("*\n", encoding="utf-8")
     with (d / ".lock").open("a+b") as f:
         if os.name == "nt":
             import msvcrt
@@ -230,6 +279,8 @@ def load(d: Path) -> dict:
             s.update(value)
         except (ValueError, OSError):
             s.update(active=True, phase="idle", mode=None)  # corrupt state fails closed
+    elif d.parent.name == "sessions" and always_flag().exists():
+        s.update(active=True, phase="open")  # always-on: a session starts in open work, until the user types off
     if d.parent.name == "sessions":
         s["completed"] = history(d)
     return s
@@ -256,14 +307,15 @@ def reset_gate(s: dict) -> None:
     s.update(focus_question="", help_level=0, run_spec=None, run_result=None)
 
 
-def complete(d: Path, s: dict, how: str) -> None:
+def complete(d: Path, s: dict, how: str, links: str = "") -> str:
     v, a = s["verdict"] or {}, s["agreement"] or {}
     record = {
         "id": uuid.uuid4().hex, "created": time.time(), "session_id": s["session_id"],
         "topic": s["topic"], "mode": s["mode"], "rounds": s["rounds"], "how": how,
         "turn": s["turn"], "note": v.get("note", ""), "missed": v.get("missed", ""),
         "own_words": a.get("text", ""),
-        "evidence": v.get("evidence", {}), "prediction": (s["attempt"] or {}).get("text", ""),
+        "evidence": v.get("evidence", {}),
+        "prediction": (s["attempt"] or {}).get("text", "") if s["mode"] == "predict" else "",
     }
     dest = project_dir(d) / "history"
     dest.mkdir(parents=True, exist_ok=True)
@@ -272,6 +324,112 @@ def complete(d: Path, s: dict, how: str) -> None:
     os.replace(tmp, dest / (record["id"] + ".json"))
     s["completed"].append(record)
     s["completed"] = s["completed"][-200:]
+    try:
+        return f"Saved to the user's knowledge graph: {graph_add(record, project_dir(d).parent.name, links)}"
+    except OSError as e:  # the gate record above is already safe
+        return f"Knowledge graph not written ({e})."
+
+
+# ---------------------------------------------------------------- knowledge graph
+
+STOP = {"the", "and", "for", "with", "how", "why", "what", "does", "der", "die", "das", "und", "wie", "was", "ein", "eine"}
+
+
+def graph_dir() -> Path:
+    """One folder of Markdown notes for all projects. [[wikilinks]] are the edges, so
+    Obsidian, Logseq or Foam open it as a graph without any conversion."""
+    return Path(os.environ.get("ELENCHUS_GRAPH") or home() / "graph")
+
+
+def node(name: str) -> str:
+    """A note name that is a valid file name and a valid [[wikilink]] target."""
+    return " ".join(re.sub(r'[\\/:*?"<>|#^\[\]]+', " ", name).split()).strip(". ")[:80] or "topic"
+
+
+def graph_add(rec: dict, project: str, links: str) -> Path:
+    """Append one passed gate to the note of its topic: the user's own words, the assessed
+    evidence, and edges to the project and to related notes."""
+    g = graph_dir()
+    g.mkdir(parents=True, exist_ok=True)
+    note = g / (node(rec["topic"]) + ".md")
+    ev = rec.get("evidence") or {}
+    day = time.strftime("%Y-%m-%d", time.localtime(rec["created"]))
+    kind = rec["how"] if rec["how"] in ("recall", "delegated") else rec["mode"]
+    lines = ["", f"## {day} · {kind} · gate {rec['id'][:8]}", ""]
+    if kind == "delegated":
+        lines.append("- **Left to the agent.** I did not decide this myself.")
+    for label, value in (("Decided", rec.get("note") if kind == "decide" else ""),
+                         ("My remark" if kind == "delegated" else "In my words", rec.get("own_words")),
+                         ("My prediction", rec.get("prediction")),
+                         ("How it works", ev.get("mechanism")), ("Applies to", ev.get("transfer")),
+                         ("Limit", ev.get("limit")), ("I missed", rec.get("missed"))):
+        if value:
+            lines.append(f"- **{label}:** {' '.join(value.split())}")
+    edges = dict.fromkeys(node(x) for x in [project] + links.split(",") if x.strip())
+    lines.append("- **Connects to:** " + ", ".join(f"[[{e}]]" for e in edges))
+    with locked(g):
+        with note.open("a", encoding="utf-8", newline="\n") as f:
+            if f.tell() == 0:
+                f.write(f"# {rec['topic']}\n")
+            f.write("\n".join(lines) + "\n")
+    return note
+
+
+def graph_find(query: str, limit: int | None = 5) -> list:
+    """Notes that share words with the query, best first, as (title, latest entry)."""
+    want = set(re.findall(r"\w{3,}", query.lower())) - STOP
+    g, hits = graph_dir(), []
+    for f in g.glob("*.md") if g.is_dir() else []:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        low, title = text.lower(), f.stem.lower()
+        score = sum(3 if w in title else 1 for w in want if w in low)
+        if score:
+            hits.append((score, f.stem, text.rsplit("\n## ", 1)[-1].strip()))
+    return [(t, body) for _, t, body in sorted(hits, reverse=True)[:limit]]
+
+
+def graph_due(words: str):
+    """The note to recall as (title, latest entry): the best match for the words, else the
+    one untouched longest. Decisions the user delegated are not theirs to recall."""
+    g = graph_dir()
+    if words.strip():
+        found = graph_find(words, None)
+    else:
+        found = [(f.stem, f.read_text(encoding="utf-8").rsplit("\n## ", 1)[-1].strip())
+                 for f in sorted(g.glob("*.md"), key=lambda f: f.stat().st_mtime)] if g.is_dir() else []
+    return next((hit for hit in found if "· delegated ·" not in hit[1].split("\n", 1)[0]), None)
+
+
+def graph_note(cli: str) -> str:
+    g = graph_dir()
+    notes = list(g.glob("*.md")) if g.is_dir() else []
+    n = len(notes)
+    if not n:
+        return ""
+    stale = sum(1 for f in notes if time.time() - f.stat().st_mtime > 30 * 86400)
+    return (f"ELENCHUS KNOWLEDGE GRAPH: the user keeps what they have learned and decided, in their own words, "
+            f"in {slashes(g)} ({n} notes, all projects). Before you explain a concept or settle a design question for them, "
+            f"run `{cli} graph <words>`. If they have been there before, remind them of their own conclusion and build on it "
+            "instead of redoing the thinking for them."
+            + (f" {stale} of the notes have not been revisited for a month: at a natural pause, offer `/elenchus:recall` once." if stale else ""))
+
+
+def cmd_graph(d, s, a):
+    g = graph_dir()
+    if not a.words:
+        notes = sorted(g.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True) if g.is_dir() else []
+        print(f"Knowledge graph: {g} ({len(notes)} notes). Search with `graph <words>`.")
+        for f in notes[:30]:
+            print(f"- {f.stem}")
+        return
+    hits = graph_find(" ".join(a.words))
+    if not hits:
+        print("Nothing in the knowledge graph on this yet.")
+    for title, body in hits:
+        print(f"[[{title}]] ({slashes(g / (title + '.md'))})\n## {body}\n")
 
 
 def cli_prefix(s):
@@ -295,7 +453,14 @@ def briefing(s: dict, note: str = "") -> str:
         lines.append(f"VIOLATION ON RECORD: last turn you broke a rule ({s['last_violation']}). The user was shown a warning. Do not repeat it.")
     if s.get("own_brief") and s["active"]:
         lines.append(s["own_brief"])
+    known = graph_find(s["topic"], 3) if s["phase"] not in ("open", "idle") and not s["recall"] else []
+    if known:
+        lines.append("ALREADY IN THE USER'S KNOWLEDGE GRAPH (do not re-teach; ask them to recall it, build on their words, "
+                     "and name the related notes in `assess --links`): "
+                     + " | ".join(f"[[{t}]] {' '.join(body.split())[:300]}" for t, body in known))
     lines.append(f"Next: {fmt(s['phase'], s)}")
+    if s["phase"] == "open":
+        return "\n".join(lines)
     if s["focus_question"]:
         lines.append(f"Pinned question: {s['focus_question']}")
     lines.append("A concise answer counts. Judge mechanism, transfer and limits, never length. Accept reasoned disagreement. Register questions with `question --text ...`; hints progress from a smaller question to one minimal hint.")
@@ -316,6 +481,8 @@ def emit_ctx(event: str, text: str) -> None:
 
 
 def deny(reason: str) -> None:
+    if VIBE:
+        return out({"decision": "deny", "reason": reason})
     out({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                 "permissionDecision": "deny",
                                 "permissionDecisionReason": reason}})
@@ -328,10 +495,11 @@ def hook_session(p: dict) -> None:
     s = load(d)
     s["session_id"] = p.get("session_id", "")
     pp = paper_of(d)
-    note = paper.session_note(pp, cli_prefix(s)) if pp else ""
+    note = "\n\n".join(x for x in (paper.session_note(pp, cli_prefix(s)) if pp else "", graph_note(cli_prefix(s))) if x)
     if not s["active"]:
         return emit_ctx("SessionStart", note) if note else None
-    emit_ctx("SessionStart", IRON_RULES.format(maxw=MAX_WORDS) + "\n\n" + briefing(s) + ("\n\n" + note if note else ""))
+    rules = "" if s["phase"] == "open" else IRON_RULES.format(maxw=MAX_WORDS) + "\n\n"
+    emit_ctx("SessionStart", rules + briefing(s) + ("\n\n" + note if note else ""))
 
 
 # ---------------------------------------------------------------- prompt hook
@@ -345,7 +513,7 @@ def start(s: dict, rest: str) -> None:
     elif toks and toks[0].lower() == "auto":
         topic = toks[1].strip() if len(toks) > 1 else ""
     reset_gate(s)
-    s.update(active=True, mode=mode, topic=topic or "(open)", gate_turn=s["turn"], last_violation="")
+    s.update(active=True, mode=mode, topic=topic or "(open)", gate_turn=s["turn"], last_violation="", recall=False)
     s["phase"] = "need_gate" if mode is None else ("await_prediction" if mode == "predict" else "await_attempt")
 
 
@@ -379,7 +547,7 @@ def on_predict(s: dict, text: str) -> str:
 
 def on_text(s: dict, text: str) -> str:
     ph, mode = s["phase"], s["mode"]
-    if mode in ("explain", "propose") and ph in ("await_attempt", "challenging", "attempted"):
+    if mode in ("explain", "propose", "decide") and ph in ("await_attempt", "challenging", "attempted"):
         if not meaningful(text):
             return "No attempt yet. Offer a smaller question."
         s["attempt"] = {"turn": s["turn"], "text": text[:1500]}
@@ -397,43 +565,67 @@ def on_text(s: dict, text: str) -> str:
     return ""
 
 
-def hook_prompt(p: dict) -> None:
-    d = state_dir(p.get("cwd"), p.get("session_id", ""))
-    s = load(d)
-    s["session_id"] = p.get("session_id", "")
-    prompt = (p.get("prompt") or "").strip()
-    m = CTRL_RE.match(prompt)
+def on_prompt(d: Path, s: dict, prompt: str) -> str:
+    """Only the user's own typed words move a gate. Returns the briefing for the agent."""
+    m = command(prompt)
     if m:
-        verb, rest = m.group(1).lower(), m.group(2)
+        verb, rest = m
         s["turn"] += 1
         if verb == "off":
-            s.update(active=False, phase="idle", last_violation="", own="", own_brief="")
+            s.update(active=False, phase="idle", last_violation="", own="", own_brief="", recall=False)
             save(d, s)
-            return emit_ctx("UserPromptSubmit",
-                            "ELENCHUS OFF. Gates are disabled until the user types /elenchus:learn again. Confirm in one short sentence.")
+            return "ELENCHUS OFF. Gates are disabled until the user types /elenchus:learn again. Confirm in one short sentence."
         if verb == "paper":
             save(d, s)
             if rest.strip().lower() == "all":
-                return emit_ctx("UserPromptSubmit", "ELENCHUS PAPER. Run `{cli} paper status --all` and report the overview as it is, briefly.".format(cli=cli_prefix(s)))
+                return "ELENCHUS PAPER. Run `{cli} paper status --all` and report the overview as it is, briefly.".format(cli=cli_prefix(s))
             key = PAPER_SHOW if paper_of(d) else PAPER_SETUP
-            return emit_ctx("UserPromptSubmit", "ELENCHUS PAPER. " + key.format(cli=cli_prefix(s)))
+            return "ELENCHUS PAPER. " + key.format(cli=cli_prefix(s))
         if verb == "own":
             title = rest.strip().strip('"')
             pp = paper_of(d)
             if not title or not pp:
                 save(d, s)
                 why = "This project has no owner's paper yet." if title else "Usage: /elenchus:own <decision title>."
-                return emit_ctx("UserPromptSubmit", f"ELENCHUS: {why} Tell the user in one sentence; /elenchus:paper starts one.")
+                return f"ELENCHUS: {why} Tell the user in one sentence; /elenchus:paper starts one."
             dec, problem = paper.readiness(pp, title)
             if problem:
                 save(d, s)
-                return emit_ctx("UserPromptSubmit", "ELENCHUS: not ready to own. " + problem +
-                                " Tell the user exactly this in one or two sentences. Do not write the formal statement for them.")
+                return ("ELENCHUS: not ready to own. " + problem +
+                        " Tell the user exactly this in one or two sentences. Do not write the formal statement for them.")
             start(s, "propose " + dec["title"])
             s["own"], s["own_brief"] = dec["title"], paper.gate_brief(pp, dec["title"])
         if verb == "learn":
             start(s, rest)
             s["own"] = s["own_brief"] = ""
+        if verb == "recall":
+            due = graph_due(rest)
+            if not due:
+                return "ELENCHUS: the knowledge graph has no note to recall for this yet. Tell the user in one sentence."
+            start(s, "explain " + due[0])
+            s["own"], s["recall"] = "", True
+            s["own_brief"] = ("RECALL GATE. The user passed this before. Their latest entry, which they must not see yet: <<"
+                              + " ".join(due[1].split())[:1500] + ">> Ask them to reproduce from memory what they concluded and why. "
+                              "Do not show or paraphrase the old entry until they have answered. Then probe what faded or changed, "
+                              "and say plainly what held.")
+        if verb == "always":
+            if rest.strip().lower() not in ("on", "off"):
+                return "ELENCHUS: Usage: /elenchus:always on|off. Nothing changed."
+            flag, on = always_flag(), rest.strip().lower() == "on"
+            if on:
+                flag.parent.mkdir(parents=True, exist_ok=True)
+                flag.touch()
+                if not s["active"]:
+                    s.update(active=True, phase="open")
+            elif flag.exists():
+                flag.unlink()
+            if (d / "state.json").exists() or (not on and s["active"]):
+                save(d, s)
+            if not on:
+                return "ELENCHUS ALWAYS OFF. New sessions start without Elenchus again; this session is unchanged. Confirm in one sentence."
+            return ("ELENCHUS ALWAYS ON. Every new session, in every project, now starts in open work: nothing is locked, and "
+                    "decisions that shape the result go to the user as decide gates. /elenchus:off ends it for one session, "
+                    "/elenchus:always off for all. Confirm in one sentence.\n\n" + briefing(s))
         if verb == "focus":
             if rest.strip().lower() in ("full", "compact"):
                 s["ui_details"] = rest.strip().lower() == "full"
@@ -441,25 +633,107 @@ def hook_prompt(p: dict) -> None:
             s["housekeeping_turn"] = s["turn"]
         save(d, s)
         if not s["active"]:
-            return emit_ctx("UserPromptSubmit", "Elenchus is not active. The user starts it with /elenchus:learn.")
+            return "Elenchus is not active. The user starts it with /elenchus:learn."
         context = IRON_RULES.format(maxw=MAX_WORDS) + "\n\n" + briefing(s)
         if verb in ("status", "focus", "cards"):
             context += "\nThis is a housekeeping command. Show only the current question and next step; do not register a challenge or assess an answer."
-        return emit_ctx("UserPromptSubmit", context)
+        return context
     if not s["active"]:
-        return
+        return ""
+    if s["phase"] == "open":
+        return briefing(s)  # nothing to record, so open work never writes to the project
     s["turn"] += 1
     am, pm = AGREE_RE.match(prompt) or REFLECT_RE.match(prompt), PREDICT_RE.match(prompt)
-    if am:
+    dm = DELEGATE_RE.match(prompt)
+    if dm and s["mode"] in ("decide", "propose") and not s["own"] and s["phase"] != "need_gate":
+        # "you pick" is a legitimate answer; it is recorded as exactly that
+        s["agreement"], s["verdict"] = {"turn": s["turn"], "text": dm.group(1).strip()[:1500]}, None
+        saved = complete(d, s, "delegated")
+        s.update(phase="open", focus_question="")
+        note = (f"The user DELEGATED this decision to you. {saved} Decide it now, tell them in one sentence what you chose "
+                f"and why, record it with `{cli_prefix(s)} choice --note \"<what you chose and why>\"`, "
+                "and log it in the owner's paper as inherited if there is one. Do not ask again.")
+    elif am:
         note = on_agree(s, am.group(1).strip())
     elif pm:
         note = on_predict(s, pm.group(1).strip())
     else:
         note = on_text(s, prompt)
     text = briefing(s, note)
-    s["last_violation"] = ""  # shown to Claude once
+    s["last_violation"] = ""  # shown to the agent once
     save(d, s)
-    emit_ctx("UserPromptSubmit", text)
+    return text
+
+
+def hook_prompt(p: dict) -> None:
+    d = state_dir(p.get("cwd"), p.get("session_id", ""))
+    s = load(d)
+    s["session_id"] = p.get("session_id", "")
+    text = on_prompt(d, s, (p.get("prompt") or "").strip())
+    if text:
+        emit_ctx("UserPromptSubmit", text)
+
+
+# ---------------------------------------------------------------- Vibe journal
+
+def journal(path) -> list:
+    """Messages of a Vibe session, oldest first: [{"role", "ts", "text"}]. Vibe passes the
+    session's storage root as transcript_path; the journal is the JSONL files under it."""
+    root, found = Path(path or ""), {}
+    for f in sorted([*root.glob("*.jsonl"), *root.glob("journal/*.jsonl")] if path and root.is_dir() else []):
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                o = json.loads(line)
+                payload = o["payload"] if o.get("type") in ("projection_delta", "core_input") else None
+            except (ValueError, KeyError, AttributeError, TypeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            entries, blocks = [], lambda content: "\n".join(
+                b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+            if o["type"] == "projection_delta":
+                for delta in payload.get("delta") or []:
+                    e = delta.get("entry") if isinstance(delta, dict) else None
+                    if isinstance(e, dict) and e.get("type") == "message" and e.get("role") in ("user", "assistant") \
+                            and not (e["role"] == "user" and e.get("source") in ("harness", "system", "tool")):
+                        entries.append((e["role"], e.get("turnId"), e.get("createdAt"), blocks(e.get("content"))))
+            else:
+                inp = payload.get("input") or {}
+                c, ts = inp.get("command") or {}, (inp.get("determinism") or {}).get("time_unix_ms")
+                if c.get("type") == "user_message":
+                    entries.append(("user", c.get("turn_id"), ts, blocks(c.get("content"))))
+                elif c.get("type") == "completion_succeeded":
+                    # the reply is projected only after post_agent ran; the completion has it in time
+                    entries.append(("assistant", None, ts, blocks((c.get("result") or {}).get("parts"))))
+            for role, turn, ts, text in entries:
+                if text.strip() and isinstance(ts, (int, float)):
+                    # a message appears as input and as projection: keep one per turn and text
+                    found[(role, turn, text)] = {"role": role, "ts": ts, "text": text}
+    return sorted(found.values(), key=lambda e: e["ts"])
+
+
+def read_turns(p: dict, d: Path, s: dict) -> None:
+    """Vibe has no prompt hook: record the user messages the journal holds and this
+    session has not seen yet, exactly as a prompt hook would."""
+    for e in journal(p.get("transcript_path")):
+        text = e["text"].strip()
+        if e["role"] != "user" or e["ts"] <= s["prompt_ts"]:
+            continue
+        s["prompt_ts"] = e["ts"]
+        if text.startswith(TAG) or re.match(r"ELENCHUS(-COMMAND|[\s:|])", text):
+            continue  # hook retries and skill bodies are not the user's words
+        was_active = s["active"]
+        s["turn_nudges"] = 0
+        note = on_prompt(d, s, text)
+        if (d / "state.json").exists() and (note or was_active):
+            s["notice"] = note
+            save(d, s)  # a session without state stays off disk; its old messages replay as no-ops
+
+
 
 
 # ---------------------------------------------------------------- tool hook
@@ -519,31 +793,42 @@ def tokenize(cmd: str, ps: bool = False):
     return toks
 
 
-def is_cli(cmd: str, ps: bool = False, cwd: str = "", session_id: str = "") -> bool:
+def same_engine(path: str, cwd: str) -> bool:
+    """Vibe runs hooks from a pinned copy of the plugin while the agent may call the
+    installed one. A byte-identical copy of this file is this engine."""
+    try:
+        f = Path(path) if os.path.isabs(path) else Path(cwd or ".") / path
+        return f.name == SCRIPT.name and f.read_bytes() == SCRIPT.read_bytes()
+    except OSError:
+        return False
+
+
+def is_cli(cmd: str, ps: bool = False, cwd: str = "", session_id: str = "") -> str:
+    """The engine subcommand when cmd is exactly one call of this engine for this session, else ''."""
     c = cmd
     for var in ("CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"):
         c = c.replace("${" + var + "}", ROOT_RAW).replace("$" + var, ROOT_RAW)
     toks = tokenize(c, ps)
     if not toks:
-        return False
+        return ""
     if toks[0] == "&":
         toks = toks[1:]
     if len(toks) < 3 or not is_python(toks[0]):
-        return False
+        return ""
     base = re.sub(r"\.exe$", "", posixpath.basename(slashes(toks[0])).lower())
     i = 2 if (base == "py" and toks[1].startswith("-")) else 1
     if len(toks) <= i + 1:
-        return False
-    if fwd(toks[i], cwd) != SCRIPT_F:
-        return False
+        return ""
+    if fwd(toks[i], cwd) != SCRIPT_F and not same_engine(toks[i], cwd):
+        return ""
     tail = toks[i + 1:]
     if tail[:1] == ["--session"]:
         if len(tail) < 3 or tail[1] != session_id:
-            return False
+            return ""
         tail = tail[2:]
     elif session_id:
-        return False
-    return bool(tail) and tail[0] in CLI_CMDS and "--session" not in tail[1:]
+        return ""
+    return tail[0] if tail and tail[0] in CLI_CMDS and "--session" not in tail[1:] else ""
 
 
 def protected(path: str, cwd: str) -> bool:
@@ -552,12 +837,15 @@ def protected(path: str, cwd: str) -> bool:
         return True
     if f == ROOT_F or f.startswith(ROOT_F + "/"):
         return True
-    return "/.claude/settings" in f or "/.codex/config" in f or f.endswith("/hooks.json")
+    return ("/.claude/settings" in f or "/.codex/config" in f or "/.vibe/plugins" in f or "/.vibe/config" in f
+            or "/.config/elenchus" in f + "/"
+            or f.endswith(("/hooks.json", "/hooks.toml")))
 
 
 def touches_machinery(cmd: str) -> bool:
     lc = slashes(cmd).lower()
-    return ".elenchus" in lc or ".claude/settings" in lc or ".codex/config" in lc or "hooks.json" in lc or ROOT_F in lc or bool(ROOT_M and ROOT_M in lc)
+    return (".elenchus" in lc or ".config/elenchus" in lc or ".claude/settings" in lc or ".codex/config" in lc or ".vibe/plugins" in lc
+            or ".vibe/config" in lc or "hooks.json" in lc or "hooks.toml" in lc or ROOT_F in lc or bool(ROOT_M and ROOT_M in lc))
 
 
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$", re.M)
@@ -585,38 +873,49 @@ def shell_command(ti: dict) -> str:
 
 
 def mcp_read_only(tool: str) -> bool:
-    if not tool.startswith("mcp__"):
+    if not tool.startswith(("mcp__", "connector_")):
         return False
     last = tool.split("__")[-1]
     return bool(MCP_READ.search(last)) and not MCP_WRITE.search(last)
 
 
 def hook_pretool(p: dict) -> None:
-    s = load(state_dir(p.get("cwd"), p.get("session_id", "")))
+    d = state_dir(p.get("cwd"), p.get("session_id", ""))
+    s = load(d)
     s["session_id"] = p.get("session_id", "")
-    if not s["active"]:
-        return
+    if VIBE:
+        read_turns(p, d, s)  # the first tool call of a turn records what the user typed
     tool, ti, cwd = p.get("tool_name", ""), p.get("tool_input") or {}, p.get("cwd", "")
     if not isinstance(ti, dict):
         ti = {}
+    names = {tool, tool.rsplit(".", 1)[-1]}  # Vibe qualifies its tools: file_system.bash
+    sub = is_cli(shell_command(ti), bool(names & {"PowerShell", "powershell"}), cwd, s["session_id"]) if names & SHELL_TOOLS else ""
+    if sub and sub != "run" and HOST == "Claude":
+        # The engine's own bookkeeping needs no permission prompt. `run` executes code and keeps it.
+        # shortcut: Claude Code only; Codex and Vibe cannot be told to approve from a hook, revisit when they can.
+        return out({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                           "permissionDecisionReason": "Elenchus bookkeeping"}})
+    if not s["active"]:
+        return
     for v in [ti.get(k) for k in ("file_path", "notebook_path", "path")] + patch_paths(tool, ti):
         if isinstance(v, str) and v and protected(v, cwd):
             return deny("ELENCHUS: the gate machinery (.elenchus, the plugin, hook and settings files) is off limits. Use the CLI.")
-    if tool in SHELL_TOOLS:
+    if names & SHELL_TOOLS:
         cmd = shell_command(ti)
-        if is_cli(cmd, tool == "PowerShell", cwd, s["session_id"]):
+        if sub:
             return
         if touches_machinery(cmd):
             return deny("ELENCHUS: touching the gate machinery from the shell is not allowed. Use the CLI commands only.")
     ph, mode = s["phase"], s["mode"]
-    if tool in READ_TOOLS or mcp_read_only(tool):
+    if names & READ_TOOLS or mcp_read_only(tool):
         return
     if ph == "open":
         return
     if mode == "predict":
-        if ph == "await_prediction" and tool in WRITE_TOOLS:
+        if ph == "await_prediction" and names & WRITE_TOOLS:
             return
-    deny(f"ELENCHUS LOCKED ({mode or 'unset'}/{ph}). {tool} is blocked until the user has done their part. {fmt(ph, s)}")
+    deny(f"ELENCHUS LOCKED ({mode or 'unset'}/{ph}). {tool} is blocked until the user has done their part. {fmt(ph, s)}"
+         + (f" Run `{cli_prefix(s)} status` for the full briefing." if VIBE else ""))
 
 
 # ---------------------------------------------------------------- stop hook
@@ -700,7 +999,7 @@ def teeth(s: dict, text):
     if ph in ("await_attempt", "challenging") and not asks(text):
         return f"{TAG} no ask for the user. Add one closing sentence they must answer in their own words. {NOREPEAT}"
     if ph == "attempted":
-        return (f"{TAG} register your move first: `{CLI} challenge --text ...` or `{CLI} verdict --note ...`, "
+        return (f"{TAG} register your move first: `{CLI} challenge --text ...` or `{CLI} verdict --note ...` (decide gate: `assess`), "
                 f"then end the turn. {NOREPEAT}")
     if ph == "review":
         return f"{TAG} assess the reflection before ending; accept sound reasoning or register a retry question."
@@ -725,23 +1024,28 @@ def teeth(s: dict, text):
 def hook_stop(p: dict) -> None:
     d = state_dir(p.get("cwd"), p.get("session_id", ""))
     s = load(d)
+    if VIBE:
+        s["session_id"] = p.get("session_id", "")
+        read_turns(p, d, s)  # covers turns without a tool call
     if not s["active"]:
         return
     text = p.get("last_assistant_message")
     if not isinstance(text, str) or not text.strip():
-        text = last_text(p.get("transcript_path"))
+        text = (next((e["text"] for e in reversed(journal(p.get("transcript_path"))) if e["role"] == "assistant"), None)
+                if VIBE else last_text(p.get("transcript_path")))
     reason = teeth(s, text)
     warn = None
     if reason:
-        if not p.get("stop_hook_active"):
+        if VIBE and not s["turn_nudges"]:
+            s["turn_nudges"] = 1
+            save(d, s)
+            return out({"decision": "deny", "reason": reason})  # Vibe hands the reason back as a retry
+        if not VIBE and not p.get("stop_hook_active"):
             return out({"decision": "block", "reason": reason})
         s["violations"] += 1
         s["last_violation"] = reason[:160]
         warn = f"[+] Elenchus warning: {HOST} ignored a rule and ended its turn anyway. {reason.replace(TAG, '').strip()[:160]}"
-    if s["phase"] == "open":
-        s["phase"] = "idle"
-        reset_gate(s)
-    elif text and asks(text) and s["phase"] in ("await_attempt", "challenging", "await_prediction", "verdict_ok", "await_reconcile") and reason is None:
+    if text and asks(text) and s["phase"] in ("await_attempt", "challenging", "await_prediction", "verdict_ok", "await_reconcile") and reason is None:
         # Keep the last valid ask beside the input, even without explicit question CLI.
         # Prediction replies may include the code being shown. Only pin the ask.
         s["focus_question"] = re.sub(r"```.*?```", "", text, flags=re.S).strip()[-1500:]
@@ -749,7 +1053,7 @@ def hook_stop(p: dict) -> None:
         return
     save(d, s)
     if warn:
-        out({"systemMessage": warn})
+        out({"system_message" if VIBE else "systemMessage": warn})
 
 
 # ---------------------------------------------------------------- CLI
@@ -766,7 +1070,7 @@ def need_active(s: dict) -> None:
 
 def cmd_gate(d, s, a):
     need_active(s)
-    if s["phase"] not in ("need_gate", "idle"):
+    if s["phase"] not in ("need_gate", "idle", "open"):
         die(f"A gate is already in progress (mode={s['mode']}, phase={s['phase']}). Finish it first.")
     reset_gate(s)
     s.update(mode=a.mode, topic=a.topic, gate_turn=s["turn"])
@@ -793,10 +1097,12 @@ def cmd_question(d, s, a):
 
 def cmd_challenge(d, s, a):
     need_active(s)
-    if s["mode"] not in ("explain", "propose"):
-        die("challenge applies to explain and propose gates only.")
+    if s["mode"] not in ("explain", "propose", "decide"):
+        die("challenge applies to explain, propose and decide gates only.")
     if s["phase"] != "attempted":
         die(f"Cannot challenge in phase {s['phase']}. The user has to make an attempt first.")
+    if s["mode"] == "decide" and not s["agreement"]:
+        s["agreement"] = {"turn": s["turn"], "text": s["attempt"]["text"]}  # the choice as first stated
     s["rounds"] += 1
     s["challenge_turn"] = s["turn"]
     s["challenges"].append(a.text[:500])
@@ -810,7 +1116,7 @@ def cmd_challenge(d, s, a):
 def cmd_verdict(d, s, a):
     need_active(s)
     if s["mode"] not in ("explain", "propose"):
-        die("verdict applies to explain and propose gates only.")
+        die("verdict applies to explain and propose gates only. A decide gate ends with assess.")
     if s["phase"] != "attempted":
         die(f"Cannot accept in phase {s['phase']}. The user must have answered your latest challenge first.")
     need = MIN_ROUNDS[s["mode"]]
@@ -827,7 +1133,15 @@ def cmd_verdict(d, s, a):
 
 def cmd_assess(d, s, a):
     need_active(s)
-    if s["phase"] != "review" or not s["agreement"]:
+    decide = s["mode"] == "decide"
+    if decide:
+        if s["phase"] != "attempted" or s["rounds"] < 1 or s["attempt"]["turn"] <= s["challenge_turn"]:
+            die("A decide gate needs the user's choice, one challenge and their answer before it can be accepted.")
+        if a.result == "retry":
+            die("In a decide gate, challenge again instead of retrying.")
+        first = (s["agreement"] or {}).get("text", "")
+        s["agreement"] = {"turn": s["turn"], "text": f"{first} | Challenged, I answered: {s['attempt']['text']}"}
+    elif s["phase"] != "review" or not s["agreement"]:
         die("Only a user reflection can be assessed.")
     if a.result == "retry":
         if not a.question or words(a.question) > MAX_WORDS or not asks(a.question) or leaks(a.question):
@@ -839,23 +1153,25 @@ def cmd_assess(d, s, a):
         print("Reflection needs another step. Question pinned; tools stay locked.")
         return
     evidence = {k: getattr(a, k) for k in ("mechanism", "transfer", "limit")}
-    if not all(meaningful(v) for v in evidence.values()) or not a.note:
+    if decide:
+        evidence = {k: v for k, v in evidence.items() if v}
+        if not a.note:
+            die("Acceptance needs --note: the decision and its reason, in the user's words.")
+    elif not all(meaningful(v) for v in evidence.values()) or not a.note:
         die("Acceptance needs evidence of mechanism, transfer to a new case, a limit, and a note. Quote or paraphrase the learner; do not invent evidence.")
     if s["mode"] == "predict" and not s["run_result"]:
         die("A prediction gate needs a recorded execution before acceptance.")
     verdict = s["verdict"] or {}
     verdict.update(note=a.note[:1500], evidence=evidence, missed=a.missed or verdict.get("missed", ""))
     s["verdict"] = verdict
-    complete(d, s, "reconcile" if s["mode"] == "predict" else "reflection")
+    saved = complete(d, s, "recall" if s["recall"] else "reconcile" if s["mode"] == "predict" else "reflection", a.links)
     owned = ""
     if s.get("own"):
         p = paper_of(d)
         owned = paper.bind(p, s["own"], s["completed"][-1]) if p else "No paper found; run `paper bind` after /elenchus:paper."
-        s["own"] = s["own_brief"] = ""
-    s["phase"] = "open"
-    s["focus_question"] = ""
+    s.update(own="", own_brief="", recall=False, last_violation="", phase="open", focus_question="")
     save(d, s)
-    print("Understanding accepted. One turn of work is open." + (f" {owned}." if owned else ""))
+    print("Understanding accepted. Work is open until the next gate starts." + (f" {owned}." if owned else "") + f" {saved}")
 
 
 def source_path(name, cwd):
@@ -960,13 +1276,14 @@ def cmd_cards(d, s, a):
             print(f"{f}: {n} cards")
         return
     need_active(s)
-    topics = [c["topic"] for c in s["completed"]]
+    passed = [c for c in s["completed"] if c.get("how") != "delegated"]
+    topics = [c["topic"] for c in passed]
     if not topics:
         die("No topic has passed its gate yet. Cards come only from completed gates.")
     topic = a.topic or topics[-1]
     if topic not in topics:
         die(f"Topic {topic!r} has not passed a gate. Completed: {topics[-5:]}")
-    mode = next(c["mode"] for c in reversed(s["completed"]) if c["topic"] == topic)
+    mode = next(c["mode"] for c in reversed(passed) if c["topic"] == topic)
     if a.cloze and "{{c" not in a.front:
         die("A cloze card needs {{c1::...}} markup in --front.")
     esc = lambda x: html.escape(x).replace("\t", " ").replace("\r", "").replace("\n", "<br>")
@@ -996,6 +1313,41 @@ def cmd_cards(d, s, a):
 def paper_of(d: Path):
     edir = project_dir(d)
     return paper.find(edir.parent, edir)
+
+
+def cmd_choice(d, s, a):
+    """Append the agent's choice to this session's latest delegation, never user words."""
+    need_active(s)
+    rec = next((c for c in reversed(s["completed"]) if c.get("session_id") == s["session_id"]), None)
+    if s["phase"] != "open" or not rec or rec.get("how") != "delegated":
+        die("Only this session's latest delegated decision can receive an agent choice, in open work.")
+    note = " ".join(a.note.split())
+    if not note or len(note) > 1500:
+        die("A choice needs --note with 1 to 1500 characters.")
+    if rec.get("agent_choice") and rec["agent_choice"] != note:
+        die("The agent's choice is already recorded; it cannot be replaced.")
+    rec["agent_choice"] = note
+    dest = project_dir(d) / "history" / (rec["id"] + ".json")
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, dest)
+    save(d, s)
+    path = graph_dir() / (node(rec["topic"]) + ".md")
+    try:
+        with locked(graph_dir()):
+            text = path.read_text(encoding="utf-8")
+            entries = text.split("\n## ")
+            entry = next(i for i, body in enumerate(entries[1:], 1)
+                         if body.split("\n", 1)[0].endswith("· delegated · gate " + rec["id"][:8]))
+            line = f"- **The agent chose:** {note}\n"
+            if line not in entries[entry].splitlines(keepends=True):
+                entries[entry] = entries[entry].rstrip("\n") + "\n" + line
+                tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+                tmp.write_text("\n## ".join(entries), encoding="utf-8")
+                os.replace(tmp, path)
+    except (OSError, StopIteration) as exc:
+        die(f"Choice saved in project history; graph update failed ({exc}). Retry the same choice after fixing the graph.")
+    print(f"Agent choice recorded: {path}")
 
 
 PAPER_SETUP = ("The user wants an owner's paper for this project. Ask once where it should live: inside this repository "
@@ -1052,7 +1404,8 @@ def cmd_paper(d, s, a):
             recs.append(json.loads(f.read_text(encoding="utf-8")))
         except ValueError:
             continue
-    recs = sorted((r for r in recs if not a.gate or r.get("id") == a.gate), key=lambda r: r.get("created", 0))
+    recs = sorted((r for r in recs if r.get("how") != "delegated" and (not a.gate or r.get("id") == a.gate)),
+                  key=lambda r: r.get("created", 0))
     if not recs:
         die("No passed gate in this project." if not a.gate else f"Gate {a.gate} not found in this project.")
     print(paper.bind(p, a.title, recs[-1]))
@@ -1060,8 +1413,12 @@ def cmd_paper(d, s, a):
 
 def cmd_status(d, s, a):
     if not s["active"]:
-        print("Elenchus is inactive. The user starts it with /elenchus:learn.")
+        print(s["notice"] or "Elenchus is inactive. The user starts it with /elenchus:learn.")
         return
+    if s["notice"]:  # Vibe: what the user's last message produced, delivered once
+        print(s["notice"] + "\n")
+        s["notice"] = ""
+        save(d, s)
     print(briefing(s))
     print(f"Completed gates: {len(s['completed'])} | rule violations on record: {s['violations']}")
     print("Earlier topics (use only a genuinely relevant connection):")
@@ -1069,6 +1426,10 @@ def cmd_status(d, s, a):
         print(json.dumps({k: c.get(k, "") for k in ("topic", "mode", "own_words", "missed", "evidence")}, ensure_ascii=False))
     if not s["completed"]:
         print("None yet. Do not invent a connection card.")
+    pp = paper_of(d)  # Vibe has no session hook, so status carries the session notes
+    for note in (paper.session_note(pp, cli_prefix(s)) if pp else "", graph_note(cli_prefix(s))):
+        if note:
+            print("\n" + note)
 
 
 def cli_main(argv):
@@ -1088,7 +1449,7 @@ def cli_main(argv):
     q.add_argument("--support", choices=("question", "smaller", "hint"), default="question")
     review = sub.add_parser("assess")
     review.add_argument("--result", choices=("accept", "retry"), required=True)
-    for key in ("mechanism", "transfer", "limit", "note", "missed", "question"):
+    for key in ("mechanism", "transfer", "limit", "note", "missed", "question", "links"):
         review.add_argument("--" + key, default="")
     prepare = sub.add_parser("prepare")
     prepare.add_argument("--runtime", choices=("python", "node"), required=True)
@@ -1122,16 +1483,28 @@ def cli_main(argv):
     pb = ps.add_parser("bind")
     pb.add_argument("--title", required=True)
     pb.add_argument("--gate", default="")
+    sub.add_parser("graph").add_argument("words", nargs="*")
+    sub.add_parser("choice").add_argument("--note", required=True)
     a = ap.parse_args(argv)
+    if a.cmd == "graph":  # reads only what spans projects: no project state, no folder
+        return cmd_graph(None, None, a)
+    if a.cmd == "paper" and a.sub == "status" and a.all:
+        return print(paper.status_all())
+    if not a.session and a.cmd == "status":
+        # Vibe cannot tell the agent its session id: a bare status adopts the newest
+        # session here, and its briefing prints the exact prefix for everything else.
+        states = list((state_dir(None, "") / "sessions").glob("s-*/state.json"))
+        if states:
+            a.session = bytes.fromhex(max(states, key=lambda f: f.stat().st_mtime).parent.name[2:]).decode("utf-8", "replace")
     d = state_dir(None, a.session)
-    with locked(d):
+    with maybe_locked(d):
         s = load(d)
         s["session_id"] = a.session
         handler = {"gate": cmd_gate, "challenge": cmd_challenge, "verdict": cmd_verdict,
                    "assess": cmd_assess, "prepare": cmd_prepare, "run": cmd_run,
                    "question": cmd_question, "status": cmd_status, "cards": cmd_cards,
-                   "paper": cmd_paper}[a.cmd]
-        if a.cmd == "cards":
+                   "paper": cmd_paper, "graph": cmd_graph, "choice": cmd_choice}[a.cmd]
+        if a.cmd == "cards" and (a.sub == "add" or (project_dir(d) / "anki").is_dir()):
             with locked(project_dir(d) / "anki"):
                 handler(d, s, a)
         else:
@@ -1158,7 +1531,7 @@ def main() -> None:
             if not isinstance(payload, dict):
                 raise ValueError("Expected a hook object")
             d = state_dir(payload.get("cwd"), payload.get("session_id", ""))
-            with locked(d):
+            with maybe_locked(d):
                 HOOKS[argv[0]](payload)
         except Exception as e:  # never let a hook crash open the gate
             if argv[0] == "hook-pretool":

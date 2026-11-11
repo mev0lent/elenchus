@@ -1,7 +1,6 @@
 """Owner's paper: one Typst file per project, compiled to PDF. It lists the project's
 decisions, each tied to a formal statement (an equation, invariant, definition or
-algorithm), and whether each decision is the user's. Shared byte for byte by the
-Claude/Codex and Vibe engines (a test keeps the copies equal).
+algorithm), and whether each decision is the user's. Shared by all host adapters.
 
 A decision is one line:
   #decision("title", origin: "inherited", where: "file:line", formal: <label>)

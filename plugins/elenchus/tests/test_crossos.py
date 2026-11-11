@@ -118,14 +118,14 @@ def scenario_leaks():
     check("stop allows short question", '"block"' not in p.stop("What does the client verify first?"))
     check("uses last_assistant_message not stale transcript", '"block"' in p.stop("No question here.", lam=True))
     check("transcript fallback still works", '"block"' in p.stop("No question here.", lam=False))
-    # idle phase: no gate, long answers are blocked
+    # after a pass, work stays open: no lock and no reply policing until the next gate
     to_open(p, "dns")
     p.stop("done")
-    check("phase idle after open turn", p.state()["phase"] == "idle")
-    check("idle: long answer blocked", '"block"' in p.stop("word " * 300))
-    check("idle: code block blocked", '"block"' in p.stop("Here you go:\n```\nls\n```"))
-    check("idle: short reply allowed", '"block"' not in p.stop("Port 53. Want to learn how it works?"))
+    check("work stays open after the turn ends", p.state()["phase"] == "open")
+    check("open: long answer allowed", '"block"' not in p.stop("word " * 300))
+    check("open: code block allowed", '"block"' not in p.stop("Here you go:\n```\nls\n```"))
     # violation accountability: Claude ignores the block (stop_hook_active=True)
+    p.prompt("/elenchus:learn explain routing")
     out = p.stop("word " * 300, active=True)
     check("ignored block warns the user", '"systemMessage"' in out and "ignored a rule" in out)
     check("violation counted", p.state()["violations"] == 1)
@@ -159,8 +159,8 @@ def scenario_markers():
     p.prompt("elenchus learn propose a plugin idea")
     check("plain text form still works", p.state()["active"] and p.state()["mode"] == "propose")
     for f in ("learn", "off", "status"):
-        body = (PLUGIN / "commands" / f"{f}.md").read_text(encoding="utf-8")
-        check(f"commands/{f}.md carries the marker", f"ELENCHUS-COMMAND {f}" in body)
+        body = (PLUGIN / "skills" / f / "SKILL.md").read_text(encoding="utf-8")
+        check(f"skills/{f} carries the marker", f"ELENCHUS-COMMAND {f}" in body)
 
 
 # ---------------------------------------------------------------- windows paths

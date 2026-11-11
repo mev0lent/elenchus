@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_gates import Gates  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-VIBE = HERE.parent.parent / "elenchus-vibe" / "scripts" / "elenchus.py"
 TITLE = "Archive iff P(normal) >= tau"
 MODEL = '''$ "archive"(x) <==> P("normal" | x) >= tau $ <eq-gate>
 #algorithm("Triage", input: [$x$], output: [archive or escalate])[
@@ -88,6 +87,16 @@ class Paper(Gates):
     def test_own_needs_a_paper(self):
         self.assertIn("no owner's paper", self.ctx(self.prompt(f"/elenchus:own {TITLE}")))
         self.assertFalse(self.state()["active"])
+
+    def test_delegation_cannot_be_bound_as_owned(self):
+        p = self.make_paper()
+        before = p.read_text(encoding="utf-8")
+        self.prompt(f"/elenchus:learn decide {TITLE}")
+        self.prompt("delegate: let the agent choose")
+        gate = self.state()["completed"][-1]["id"]
+        for args in ((), ("--gate", gate)):
+            self.assertNotEqual(self.cli("paper", "bind", "--title", TITLE, *args).returncode, 0)
+        self.assertEqual(p.read_text(encoding="utf-8"), before)
 
     def test_own_refuses_what_is_not_formalized(self):
         self.make_paper()
@@ -171,44 +180,6 @@ class Paper(Gates):
         self.assertTrue(p.with_suffix(".pdf").read_bytes().startswith(b"%PDF"))
         p.write_text(t.replace("<eq-gate>, <alg-triage>", "<eq-gone>"), encoding="utf-8")
         self.assertNotEqual(self.cli("paper", "build").returncode, 0)
-
-    def test_paper_module_identical_in_both_engines(self):
-        self.assertEqual((HERE.parent / "scripts" / "paper.py").read_bytes(), (VIBE.parent / "paper.py").read_bytes())
-
-
-class VibePaper(unittest.TestCase):
-    def setUp(self):
-        import os
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.cwd = Path(self.tmp.name)
-        self.env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PROJECT_DIR", "ELENCHUS_DIR")}
-        self.env["ELENCHUS_DIR"] = str(self.cwd / ".elenchus")
-        self.env["ELENCHUS_PAPERS"] = str(self.cwd / "papers.json")
-
-    def run_(self, args, payload=None):
-        return subprocess.run([sys.executable, str(VIBE), *args], input=json.dumps(payload) if payload else "",
-                              capture_output=True, text=True, encoding="utf-8", env=self.env, cwd=self.cwd)
-
-    def test_own_flow_and_refusal(self):
-        cli = lambda *a: self.run_(["--session", "v", *a])
-        say = lambda text: self.run_(["hook-prompt"], {"cwd": str(self.cwd), "session_id": "v", "prompt": text})
-        self.assertEqual(cli("paper", "init", "--path", "docs/paper", "--name", "demo").returncode, 0)
-        fill(self.cwd / "docs" / "paper" / "main.typ")
-        say("/elenchus:own Retry three times")
-        self.assertIn("NOT READY TO OWN", cli("status").stdout)
-        say(f"/elenchus:own {TITLE}")
-        self.assertIn("OWN GATE", cli("status").stdout)
-        say("Archive only when confident.")
-        for _ in range(2):
-            self.assertEqual(cli("challenge", "--text", "What at p = tau?").returncode, 0)
-            say("Equality archives.")
-        self.assertEqual(cli("verdict", "--note", "defended").returncode, 0)
-        say("reflect: >= puts the boundary on the archive side.")
-        r = cli("assess", "--result", "accept", "--mechanism", "boundary", "--transfer", "hard tier",
-                "--limit", "calibration", "--note", "sound")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("1 owned", cli("paper", "status").stdout)
 
 
 if __name__ == "__main__":

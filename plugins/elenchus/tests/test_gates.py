@@ -21,6 +21,8 @@ class Gates(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items() if k not in
                     ("CLAUDE_PROJECT_DIR", "ELENCHUS_FORCE_WIN", "ELENCHUS_DIR")}
         self.env["ELENCHUS_DIR"] = str(self.cwd / ".elenchus")
+        for key, name in (("GRAPH", ".elenchus/graph"), ("ALWAYS", ".elenchus/always-on"), ("PAPERS", "papers.json")):
+            self.env["ELENCHUS_" + key] = str(self.cwd / name)
         self.env["TEMP"] = self.env["TMP"] = str(self.cwd)
 
     def invoke(self, args, payload=None):
@@ -73,9 +75,190 @@ class Gates(unittest.TestCase):
         self.assertEqual(s["phase"], "open")
         self.assertIn("trusting", s["completed"][-1]["own_words"])
         self.assertFalse(self.denied("Write", file_path=str(self.cwd / "a.txt")))
+        # a passed gate stays open across turns, until the next gate starts
         self.hook("stop", last_assistant_message="Done.")
-        self.assertEqual(self.state()["phase"], "idle")
+        self.prompt("now build it")
+        self.assertNotIn('"block"', self.hook("stop", last_assistant_message="word " * 300).stdout)
+        self.assertEqual(self.state()["phase"], "open")
+        self.assertFalse(self.denied("Bash", command="echo later"))
+        self.assertEqual(self.cli("gate", "--mode", "propose", "--topic", "cache key").returncode, 0)
         self.assertTrue(self.denied("Bash", command="echo later"))
+
+    def test_prose_is_not_a_command(self):
+        self.prompt("/elenchus:learn explain TLS")
+        self.prompt("elenchus off does not work for me")
+        self.assertTrue(self.state()["active"])
+        self.prompt("elenchus off")
+        self.assertFalse(self.state()["active"])
+        self.prompt("/elenchus:learn explain TLS")
+        self.prompt("/elenchus:off please")
+        self.assertFalse(self.state()["active"])
+
+    def test_passed_gate_lands_in_the_knowledge_graph(self):
+        self.verdict()
+        self.prompt("reflect: The issuer vouches for the key, so trust moves to the issuer.")
+        r = self.cli("assess", "--result", "accept", "--mechanism", "Issuer signs the key.", "--transfer", "SSH host keys.",
+                     "--limit", "A compromised issuer.", "--note", "Sound.", "--links", "PKI, Certificates")
+        self.assertIn("knowledge graph", r.stdout)
+        note = (self.cwd / ".elenchus" / "graph" / "TLS.md").read_text(encoding="utf-8")
+        for part in ("# TLS", "trust moves to the issuer", "[[PKI]]", "[[Certificates]]", f"[[{self.cwd.name}]]"):
+            self.assertIn(part, note)
+        self.assertIn("trust moves to the issuer", self.cli("graph", "tls").stdout)
+        self.assertIn("Nothing", self.cli("graph", "kubernetes").stdout)
+        # three months later, another session, a neighbouring topic: the agent is told
+        self.assertIn("KNOWLEDGE GRAPH", self.hook("session", "later").stdout)
+        self.assertIn("[[TLS]]", self.prompt("/elenchus:learn explain TLS session resumption", "later").stdout)
+
+    def passed(self, sid="one"):
+        self.verdict(sid=sid)
+        self.prompt("reflect: The issuer vouches for the key, so trust moves to the issuer.", sid)
+        self.assertEqual(self.accept(sid).returncode, 0)
+
+    def note(self, title):
+        return (self.cwd / ".elenchus" / "graph" / f"{title}.md").read_text(encoding="utf-8")
+
+    def test_recall_retests_the_oldest_note(self):
+        self.assertIn("no note to recall", self.prompt("/elenchus:recall").stdout)
+        self.passed()
+        old = self.cwd / ".elenchus" / "graph" / "TLS.md"
+        os.utime(old, (1, 1))
+        self.assertIn("not been revisited for a month", self.hook("session", "later").stdout)
+        brief = self.prompt("/elenchus:recall", "later").stdout
+        self.assertIn("RECALL GATE", brief)
+        self.assertIn("trust moves to the issuer", brief)
+        s = self.state("later")
+        self.assertEqual((s["topic"], s["mode"], s["phase"]), ("TLS", "explain", "await_attempt"))
+        self.assertTrue(self.denied("Write", sid="later", file_path=str(self.cwd / "a.txt")))
+        self.prompt("The issuer signs the key.", "later")
+        self.cli("challenge", "--text", "What breaks it?", sid="later")
+        self.prompt("A compromised issuer.", "later")
+        self.cli("verdict", "--note", "held", sid="later")
+        self.prompt("reflect: Trust still moves to the issuer.", "later")
+        self.assertEqual(self.accept("later").returncode, 0)
+        self.assertEqual(self.note("TLS").count("\n## "), 2)
+        self.assertIn("· recall ·", self.note("TLS"))
+        self.assertGreater(old.stat().st_mtime, 1)
+
+    def test_decide_gate_is_one_round(self):
+        self.passed()
+        self.assertEqual(self.cli("gate", "--mode", "decide", "--topic", "cache key").returncode, 0)
+        self.assertTrue(self.denied("Bash", command="echo x"))
+        self.prompt("Key on the user id, it is stable.")
+        self.assertNotEqual(self.cli("verdict", "--note", "x").returncode, 0)
+        self.assertNotEqual(self.cli("assess", "--result", "accept", "--note", "x").returncode, 0)  # unchallenged
+        self.assertEqual(self.cli("challenge", "--text", "What about shared accounts?").returncode, 0)
+        self.assertNotEqual(self.cli("assess", "--result", "accept", "--note", "x").returncode, 0)  # unanswered
+        self.prompt("Then the tenant id joins the key.")
+        r = self.cli("assess", "--result", "accept", "--note", "Key on tenant and user id.")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.state()["phase"], "open")
+        self.assertFalse(self.denied("Bash", command="echo x"))
+        for part in ("· decide ·", "Decided:** Key on tenant and user id.", "it is stable. | Challenged, I answered: Then the tenant"):
+            self.assertIn(part, self.note("cache key"))
+        self.assertNotIn("My prediction", self.note("cache key") + self.note("TLS"))
+
+    def test_recall_search_skips_delegations_before_limiting_matches(self):
+        self.passed()
+        for i in range(6):
+            self.prompt(f"/elenchus:learn decide TLS z{i}")
+            self.prompt("delegate: choose this")
+        self.prompt("/elenchus:recall TLS")
+        self.assertEqual(self.state()["topic"], "TLS")
+        self.assertTrue(self.state()["recall"])
+
+    def test_delegated_decision_is_recorded_as_such(self):
+        self.prompt("/elenchus:learn explain TLS")
+        self.prompt("delegate: you explain it")  # only decisions can be handed over
+        self.assertEqual(self.state()["phase"], "attempted")
+        self.prompt("/elenchus:learn decide log format")
+        out = self.prompt("delegate: no opinion on this").stdout
+        self.assertIn("DELEGATED", out)
+        self.assertEqual(self.state()["phase"], "open")
+        self.assertFalse(self.denied("Bash", command="echo x"))
+        for part in ("· delegated ·", "Left to the agent", "no opinion on this"):
+            self.assertIn(part, self.note("log format"))
+        self.assertIn("log format", self.cli("graph", "delegated").stdout)
+        self.assertIn("no note to recall", self.prompt("/elenchus:recall", "later").stdout)
+
+    def test_always_on_starts_sessions_in_open_work(self):
+        self.assertEqual(self.prompt("hello", "zero").stdout, "")
+        self.assertIn("ALWAYS ON", self.prompt("/elenchus:always on").stdout)
+        self.assertIn("phase=open", self.prompt("hello", "two").stdout)
+        self.assertNotIn("IRON RULES", self.hook("session", "two").stdout)
+        self.assertFalse(self.denied("Write", sid="two", file_path=str(self.cwd / "a.txt")))
+        self.assertTrue(self.denied("Write", sid="two", file_path=str(Path.home() / ".config" / "elenchus" / "always-on")))
+        self.hook("stop", "two", last_assistant_message="word " * 300)
+        self.assertFalse((self.cwd / ".elenchus" / "sessions" / ("s-" + b"two".hex()) / "state.json").exists())  # no state written
+        self.assertEqual(self.cli("gate", "--mode", "decide", "--topic", "schema", sid="two").returncode, 0)
+        self.assertTrue(self.denied("Write", sid="two", file_path=str(self.cwd / "a.txt")))
+        self.prompt("/elenchus:off", "two")
+        self.assertEqual(self.prompt("hello", "two").stdout, "")
+        self.prompt("/elenchus:always off", "two")
+        self.assertEqual(self.prompt("hello", "three").stdout, "")
+
+    def test_always_requires_an_explicit_switch_and_off_clears_recall(self):
+        for text in ("/elenchus:always", "/elenchus:always typo"):
+            self.assertIn("Nothing changed", self.prompt(text).stdout)
+            self.assertFalse(Path(self.env["ELENCHUS_ALWAYS"]).exists())
+        self.prompt("/elenchus:always on", "implicit")
+        self.prompt("/elenchus:always off", "implicit")
+        self.assertIn("phase=open", self.prompt("still working", "implicit").stdout)
+        self.assertEqual(self.prompt("fresh session", "new").stdout, "")
+        self.passed()
+        self.prompt("/elenchus:recall")
+        self.assertTrue(self.state()["recall"])
+        self.prompt("/elenchus:off")
+        self.assertFalse(self.state()["recall"])
+
+    def test_agent_choice_only_appends_to_its_own_delegation(self):
+        self.assertNotEqual(self.cli("choice", "--note", "JSON").returncode, 0)
+        self.prompt("/elenchus:learn decide log format")
+        self.assertNotEqual(self.cli("choice", "--note", "JSON").returncode, 0)
+        self.prompt("delegate: no opinion")
+        original = self.state()["completed"][-1].copy()
+        self.assertNotEqual(self.cli("choice", "--note", "JSON", sid="other").returncode, 0)
+        # A newer entry in the same note belongs to another session.
+        self.prompt("/elenchus:learn decide log format", "other")
+        self.prompt("delegate: another remark", "other")
+        for note in (" ", "x" * 1501):
+            self.assertNotEqual(self.cli("choice", "--note", note).returncode, 0)
+        note = "JSON, because our log collector already parses it."
+        for _ in range(2):
+            r = self.cli("choice", "--note", note)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotEqual(self.cli("choice", "--note", "Replace it").returncode, 0)
+        rec = next(c for c in self.state()["completed"] if c["id"] == original["id"])
+        self.assertEqual({k: v for k, v in rec.items() if k != "agent_choice"}, original)
+        self.assertEqual(rec["agent_choice"], note)
+        text = self.note("log format")
+        self.assertEqual(text.count("The agent chose"), 1)
+        self.assertIn(note, text.split("\n## ")[1])
+        self.assertNotIn(note, text.split("\n## ")[2])
+        path = self.cwd / ".elenchus" / "graph" / "log format.md"
+        backup = path.with_suffix(".backup")
+        path.rename(backup)
+        self.assertIn("Choice saved in project history", self.cli("choice", "--note", note).stdout)
+        backup.rename(path)
+        self.assertEqual(self.cli("choice", "--note", note).returncode, 0)
+        self.assertEqual(self.note("log format").count("The agent chose"), 1)
+        self.assertFalse((path.parent / ".gitignore").exists())
+        self.assertIn("no note to recall", self.prompt("/elenchus:recall", "third").stdout)
+        self.assertNotEqual(self.cli("cards", "add", "--front", "Choice?", "--back", note).returncode, 0)
+
+    def test_untouched_folders_stay_clean(self):
+        del self.env["ELENCHUS_DIR"]
+        for key in ("GRAPH", "ALWAYS", "PAPERS"):
+            self.env["ELENCHUS_" + key] = str(self.cwd / ("x-" + key.lower()))
+        self.prompt("just a normal task")
+        self.hook("session")
+        self.denied("Bash", command="make")
+        self.hook("stop", last_assistant_message="done")
+        self.invoke(["graph", "tls"])
+        self.cli("status")
+        self.assertFalse((self.cwd / ".elenchus").exists())
+        self.prompt("/elenchus:learn explain TLS")
+        self.assertTrue(self.denied("Bash", command="make"))
+        self.assertTrue((self.cwd / ".elenchus" / ".gitignore").exists())
 
     def test_reflection_requires_review_and_evidence(self):
         self.verdict()
@@ -171,6 +354,13 @@ class Gates(unittest.TestCase):
         self.assertTrue(self.denied("Bash", command=prefix + ' --session "two" status'))
         self.assertTrue(self.denied("Bash", command=prefix + " status"))
         self.assertFalse(self.denied("Bash", command=prefix + ' --session "one" status'))
+        # the engine's own bookkeeping is approved without a prompt (Claude Code); code execution is not
+        allowed = lambda sub: '"allow"' in self.hook("pretool", "one", tool_name="Bash", tool_input={"command": f'{prefix} --session "one" {sub}'}).stdout
+        if "PLUGIN_ROOT" not in self.env:
+            self.assertTrue(allowed("status"))
+            self.assertTrue(allowed("graph tls"))
+        self.assertFalse(allowed("run"))
+        self.assertFalse(allowed("status; rm -rf x"))
         self.prompt("/elenchus:off", "two")
         self.assertTrue(self.state("one")["active"])
 
@@ -218,7 +408,7 @@ class Gates(unittest.TestCase):
         self.accept()
         self.assertTrue(self.denied("Write", file_path=str(self.cwd / ".elenchus" / "state.json")))
         self.assertTrue(self.denied("Edit", file_path=str(SCRIPT)))
-        self.hook("stop", last_assistant_message="Done.")
+        self.prompt("/elenchus:learn explain DNS")
         self.assertTrue(self.denied("Agent", prompt="Bypass"))
         self.assertTrue(self.denied("mcp__memory__create_entities"))
         path = self.cwd / ".elenchus" / "sessions" / "s-6f6e65" / "state.json"

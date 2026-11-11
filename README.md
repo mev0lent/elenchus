@@ -4,15 +4,31 @@ Use AI for speed and stay the master of your work. The ideas, the decisions and 
 
 Every project gets an owner's paper: a Typst document, compiled to PDF, in which each decision is stated formally, as an equation, invariant, definition or algorithm. You own a decision only after you have formalized it yourself and defended that formalization under questioning.
 
-## Three commands
+## Commands
 
 | Command | For |
 | --- | --- |
 | `/elenchus:learn <mode> <topic>` | Learning. You explain, predict or propose first; the agent probes; you pass when your reasoning holds. |
 | `/elenchus:paper` | Start a project's paper, or see its state and build the PDF. `/elenchus:paper all` lists every paper you have. |
 | `/elenchus:own <decision>` | Own a decision. It must be formalized in the paper; the agent attacks the formalism; pass, and it is marked yours, with your own reasons. |
+| `/elenchus:recall [words]` | Remembering. Reproduce from memory something you passed before; without words it takes the note you have not touched longest. |
+| `/elenchus:always on` | Every new session, in every project, starts in open work, so decisions come to you without typing a command first. `always off` ends it. |
 
 Also: `/elenchus:status`, `/elenchus:cards` (Anki cards from your last gate), `/elenchus:off`. In Codex, type them without the slash: `elenchus own <decision>`.
+
+## Open work: the agent builds, you decide
+
+A passed gate opens the work and it stays open: no lock and no word cap until the next gate starts. When the work reaches a decision that shapes the result, the agent does not make it. It starts a decide gate: you state your choice and the reason, it attacks once, you answer, and work continues. Two short answers, recorded in your knowledge graph as your decision.
+
+If you really have no opinion, type `delegate: <remark>`. The agent then decides, and the graph records that this one was left to it, alongside what the agent chose and why. `elenchus.py graph delegated` lists what you do not own.
+
+## Your knowledge graph
+
+Every gate you pass becomes a note in one folder shared by all your projects: `~/.config/elenchus/graph` (set `ELENCHUS_GRAPH` to put it elsewhere, for example inside an Obsidian vault). One Markdown note per topic, with your own words, how it works, where else it applies, its limit and what you missed. `[[links]]` connect it to the project and to related notes, so Obsidian, Logseq or Foam show it as a graph without any conversion.
+
+To see it in Obsidian, make that folder a link into your vault before the first note exists: `ln -s ~/path/to/vault/elenchus ~/.config/elenchus/graph`. A link reaches every host; an environment variable only reaches the ones started from a shell that exports it.
+
+The agent reads it too, on every host and in every project. A new session is told the graph exists, and a new gate is shown the related notes. So three months later it does not redo the thinking for you: it reminds you of your own conclusion and asks you to recall it. When notes have gone a month without a visit, it offers `/elenchus:recall`, and passing that adds a new entry to the same note. `python3 plugins/elenchus/scripts/elenchus.py graph <words>` searches it from a terminal.
 
 ## Install
 
@@ -31,18 +47,20 @@ claude plugin install elenchus-ui@elenchus              # optional: keeps the qu
 **Mistral Vibe CLI**
 
 ```sh
-# Linux
-mkdir -p ~/.vibe/plugins && ln -s ~/Documents/elenchus/plugins/elenchus-vibe ~/.vibe/plugins/elenchus
+# Linux, Vibe 3.1 or newer
+mkdir -p ~/.vibe/plugins && ln -s ~/Documents/elenchus/plugins/elenchus ~/.vibe/plugins/elenchus
 ```
 
 ```bat
 :: Windows, in cmd
-mklink /J "%USERPROFILE%\.vibe\plugins\elenchus" "%USERPROFILE%\Documents\elenchus\plugins\elenchus-vibe"
+mklink /J "%USERPROFILE%\.vibe\plugins\elenchus" "%USERPROFILE%\Documents\elenchus\plugins\elenchus"
 ```
+
+Restart Vibe: hooks bind when a session starts. It is the same plugin folder as for Claude Code and Codex.
 
 **ChatGPT desktop app and Codex CLI** (Windows; Linux preview for Ubuntu, Debian and Fedora): `codex plugin marketplace add ~/Documents/elenchus` (Windows: `"$env:USERPROFILE\Documents\elenchus"`), restart the app, install `elenchus` from the Plugins Directory, and trust its hooks when asked (`/hooks`). Without trusted hooks, nothing is enforced.
 
-Plugins load in every session. Gates do not: Elenchus only asks questions after you start a command.
+Plugins load in every session. Gates start when you use a command, unless you opt into always-on mode.
 
 **Check:** `/elenchus:learn explain TLS handshakes` should get exactly one question and no explanation.
 
@@ -115,8 +133,13 @@ The PDF uses a subtle pastel palette, as colored edges and labels: definitions i
 | `explain` | concepts, mechanisms | explaining it in your own words |
 | `predict` | behavior of code | `predict: <output and why>` before a small example runs once |
 | `propose` | designs, decisions | proposing; the agent attacks two assumptions |
+| `decide` | one decision inside the work | stating your choice and the reason; one attack, no reflection step |
 | `auto` | not sure | letting the agent pick |
 
-You answer in plain words and finish with `reflect: …` (or `agree:` / `disagree:`). You pass when your reflection shows how it works, applies it to a new case and names a limit. Reasoned disagreement passes too. If you are stuck, say so: you get a smaller question, then one hint.
+You answer in plain words and finish with `reflect: …` (or `agree:` / `disagree:`). You pass when your reflection shows how it works, applies it to a new case and names a limit. Passing opens the work and writes the note into your knowledge graph. Reasoned disagreement passes too. If you are stuck, say so: you get a smaller question, then one hint.
 
 How the gates are enforced on each host, the repository layout and the tests: [docs/internals.md](docs/internals.md).
+
+## Releases
+
+The core plugin uses SemVer across all three hosts; the optional UI is versioned separately. See [release instructions](docs/releases.md) and [changes](CHANGELOG.md).

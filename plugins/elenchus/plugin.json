@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "elenchus",
+  "version": "0.10.0",
+  "description": "Socratic gates, owner's papers and a knowledge graph of what you learned. Explain, predict or propose first; own a project decision by passing a gate on it.",
+  "keywords": [
+    "learning",
+    "socratic",
+    "anki"
+  ],
+  "extensions": {
+    "ai.mistral.vibe": {
+      "schemaVersion": 1,
+      "toolNamespace": "elenchus"
+    }
+  }
+}
